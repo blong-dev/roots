@@ -1,0 +1,20 @@
+name = "roots"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Dedicated D1 for roots — separate from Telekora's `learn` DB (roots is its own service).
+# Create with:  wrangler d1 create roots   → paste the id below.
+[[d1_databases]]
+binding = "DB"
+database_name = "roots"
+database_id = "TODO-run-wrangler-d1-create-roots"
+
+# Secrets Store KEK — encrypts issuer/receiver private keys + per-wallet data keys.
+# Provision before first deploy (mirrors Telekora's TELEKORA_KEK).
+# [[secrets_store_secrets]]
+# binding = "ROOTS_KEK"
+# store_id = "TODO"
+# secret_name = "ROOTS_KEK"
+
+# ROOTS_OPS_TOKEN (operator bearer) is a plain wrangler secret:  wrangler secret put ROOTS_OPS_TOKEN
