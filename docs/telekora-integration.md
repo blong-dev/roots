@@ -72,16 +72,26 @@ not a wallet.
   thereafter. This is the sovereignty moment (`dtw-handoff.md` §4). NOT part of
   DT-5 — DT-5 makes roots the store; DT-6 makes the user the key-holder.
 
-## Open decisions (need a call)
+## Open decisions
 
-1. **First-party read grant (the important one).** roots' silent-wallet bootstrap
-   auto-grants the creating consumer a *write* grant. Reads are consent-gated. Does
-   wallet creation ALSO auto-issue Telekora a *read* grant scoped to
-   `purpose = personalize_telekora` (revocable, logged)? **Recommend yes:** signing
-   up for Telekora *is* consent for Telekora to read your learning data to
-   personalize your experience — and it stays revocable + fully in the access log.
-   Without it, every smart-content read would need an explicit prompt. (This is the
-   one place DT-5 slightly widens the default; call it explicitly.)
+1. **First-party read grant — DECIDED 2026-07-06 (provenance-scoped).** A
+   contributor gets an auto-issued, revocable read grant over **the data it
+   attested to** — not a broad purpose grant. Telekora reads back its own
+   contributions (its `dt.response.*` writes + the credentials it issued); reading
+   *another* contributor's data (e.g. a KYC provider's `dt.identity.*`) requires an
+   explicit grant from the holder. This is the sovereign default: you see what you
+   contributed; cross-contributor reads are the holder's to grant.
+
+   **Requires a roots change (foundational, do first):**
+   - `records.contributor` — the consumer identity that wrote the record. It's
+     already threaded as `actor` into `writeSelfRecord`/`writeCredentialRecord`
+     (goes to `record_events`); persist it on the record row too.
+   - Read grants gain a `scope` — `own` (only records where
+     `contributor = grantee`) vs `all` (cross-contributor, the current behavior).
+     The read query adds `AND contributor = grantee` for an `own`-scoped grant.
+   - Silent-wallet bootstrap auto-issues an `own`-scoped read grant to the creating
+     consumer (alongside the existing write grant), revocable + logged.
+   This is the natural next roots increment; DT-5's read-flip (Stage 3) depends on it.
 2. **Delegation signing key.** Telekora signs holder delegations with its existing
    tenant issuer key, or a dedicated platform delegation key? Recommend the
    existing issuer key (already resolvable via did:web; one fewer key to manage).
