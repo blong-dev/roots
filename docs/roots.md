@@ -142,10 +142,12 @@ but the source of truth is the recomputation.
 
 Grounded in `wallet-v0.md` §4–5; the credential routes already exist in Telekora and move over.
 
-- **Identity:** `POST /wallets` (create + bind IdP; the silent-wallet entry) · `GET /w/:id/did.jsonl`
-  (did:webvh history) · `GET /w/:id/did.json`. **NOT YET BUILT** — the last P1 route. Tests seed wallets
-  directly; Telekora can't yet create a wallet on signup. This is the did:webvh mint + DID-doc serving,
-  which also unblocks external verification of the export proof and issuer resolution. Next.
+- **Identity:** `POST /wallets` (create + bind IdP; silent-wallet, idempotent per identity) · `GET
+  /w/:id/did.json` (W3C DID doc, Multikey) · `GET /w/:id/did.jsonl` (signed inception entry) · `GET
+  /tenants/:tid/did.json` (issuer docs). **BUILT** (`a3b8aac`). V0 identity is did:web (resolvable now);
+  did.jsonl is the did:webvh seed (one signed inception entry) — full webvh SCID/entry-hash verification
+  is later hardening (§8). The `/tenants/:tid/did.json` route makes the export proof + issued credentials
+  externally verifiable.
 - **Records:** `POST /w/:id/records` (self/tool data, typed, validated) · `GET /w/:id/records`
   (consent-gated read, logs to `access_log`) · retract / reinstate / history (moved verbatim).
   **BUILT** (`f6062b4`): the read route + grant gate. See the consent model below.
