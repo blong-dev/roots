@@ -18,49 +18,17 @@ import { Hono, type Context } from 'hono'
 import type { D1Database } from '@cloudflare/workers-types'
 import type { Env } from '../auth'
 import { consumerAuth, delegatedHolderAuth, requireScope } from '../auth'
-import { dbFirst, dbRun } from '../db'
-import { verifyExternal, type ExternalInput, type ManualMeta } from '../credentials/verify-external'
+import { dbFirst } from '../db'
+import { verifyExternal, type ExternalInput } from '../credentials/verify-external'
+import { walletExists, toExternalInput, writeSelfRecord, writeCredentialRecord } from '../records-core'
 
 const records = new Hono<Env>()
-
-// guid:roots-records-walletExists
-async function walletExists(db: D1Database, id: string): Promise<boolean> {
-  return !!(await dbFirst<{ id: string }>(db, 'SELECT id FROM wallets WHERE id = ?', id))
-}
 
 // guid:roots-records-loadRecord
 async function loadRecord(db: D1Database, walletId: string, rid: string): Promise<Record<string, unknown> | null> {
   return await dbFirst<Record<string, unknown>>(
     db, 'SELECT * FROM records WHERE id = ? AND wallet_id = ?', rid, walletId,
   )
-}
-
-// guid:roots-records-toInput  (lifted from Telekora wallet.ts)
-function toInput(body: { kind?: string; doc?: unknown; token?: string; meta?: unknown }): ExternalInput | null {
-  if (body.kind === 'jwt' && typeof body.token === 'string') return { kind: 'jwt', token: body.token.trim() }
-  if (body.kind === 'manual') return { kind: 'manual', meta: (body.meta as ManualMeta) ?? {} }
-  if (body.doc && typeof body.doc === 'object') return { kind: 'json', doc: body.doc as Record<string, unknown> }
-  if (typeof body.doc === 'string') {
-    const s = body.doc.trim()
-    if (/^eyJ[\w-]+\.[\w-]+\.[\w-]+$/.test(s)) return { kind: 'jwt', token: s }
-    try { return { kind: 'json', doc: JSON.parse(s) } } catch { return null }
-  }
-  return null
-}
-
-// guid:roots-records-upsertIssuer — seen issuers land in the registry as 'known'
-async function upsertIssuer(db: D1Database, didOrIss: string, name: string | null): Promise<string> {
-  const existing = await dbFirst<{ id: string }>(db, 'SELECT id FROM issuers WHERE did_or_iss = ?', didOrIss)
-  if (existing) return existing.id
-  const id = crypto.randomUUID()
-  await dbRun(
-    db,
-    `INSERT INTO issuers (id, did_or_iss, name, status) VALUES (?, ?, ?, 'known')
-     ON CONFLICT(did_or_iss) DO NOTHING`,
-    id, didOrIss, name,
-  )
-  const row = await dbFirst<{ id: string }>(db, 'SELECT id FROM issuers WHERE did_or_iss = ?', didOrIss)
-  return row?.id ?? id
 }
 
 // ---------------------------------------------------------------- self/tool write
@@ -73,17 +41,9 @@ records.post('/:id/records', consumerAuth, requireScope('credentials:import'), a
   if (!dataType) return c.json({ error: 'data_type required' }, 400)
   if (b?.payload === undefined || b?.payload === null) return c.json({ error: 'payload required' }, 400)
   const sourceType = b.source_type === 'tool' ? 'tool' : 'self'
-  const payload = typeof b.payload === 'string' ? b.payload : JSON.stringify(b.payload)
-  const id = crypto.randomUUID()
-  await c.env.DB.batch([
-    c.env.DB.prepare(
-      `INSERT INTO records (id, wallet_id, data_type, payload, source_type, source_ref)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).bind(id, walletId, dataType, payload, sourceType, b.source_ref ?? null),
-    c.env.DB.prepare(
-      `INSERT INTO record_events (id, record_id, event, actor) VALUES (?, ?, 'created', ?)`,
-    ).bind(crypto.randomUUID(), id, c.get('reader') ?? 'consumer'),
-  ])
+  const { id } = await writeSelfRecord(c.env.DB, {
+    walletId, dataType, payload: b.payload, sourceType, sourceRef: b.source_ref ?? null, actor: c.get('reader') ?? 'consumer',
+  })
   return c.json({ ok: true, id, data_type: dataType, source_type: sourceType })
 })
 
@@ -93,26 +53,12 @@ records.post('/:id/credentials', consumerAuth, requireScope('credentials:import'
   const walletId = c.req.param('id')!
   if (!(await walletExists(c.env.DB, walletId))) return c.json({ error: 'wallet not found' }, 404)
   const body = await c.req.json<{ kind?: string; doc?: unknown; token?: string; meta?: unknown; source_type?: string }>().catch(() => null)
-  const input = body && toInput(body)
+  const input = body && toExternalInput(body)
   if (!input) return c.json({ error: 'provide a credential ({doc}/{token}/{manual meta})' }, 400)
-
-  const report = await verifyExternal(input, c.env.DB)
-  const issuerId = report.issuer?.id ? await upsertIssuer(c.env.DB, report.issuer.id, report.issuer.name ?? null) : null
   const sourceType = body?.source_type === 'issued' ? 'issued' : 'imported'
-  const payload = input.kind === 'jwt' ? input.token
-    : input.kind === 'json' ? JSON.stringify(input.doc)
-    : JSON.stringify(input.meta ?? {})
-  const alignmentJson = report.alignments && report.alignments.length ? JSON.stringify(report.alignments) : null
-  const id = crypto.randomUUID()
-  await c.env.DB.batch([
-    c.env.DB.prepare(
-      `INSERT INTO records (id, wallet_id, data_type, payload, source_type, issuer_id, alignment_json)
-       VALUES (?, ?, 'credential', ?, ?, ?, ?)`,
-    ).bind(id, walletId, payload, sourceType, issuerId, alignmentJson),
-    c.env.DB.prepare(
-      `INSERT INTO record_events (id, record_id, event, actor) VALUES (?, ?, ?, ?)`,
-    ).bind(crypto.randomUUID(), id, sourceType === 'issued' ? 'issued' : 'imported', c.get('reader') ?? 'issuer'),
-  ])
+  const { id, report } = await writeCredentialRecord(c.env.DB, {
+    walletId, input, sourceType, actor: c.get('reader') ?? 'issuer',
+  })
   // tier is a reading — returned for convenience, never stored.
   return c.json({ ok: true, id, tier: report.tier, issuer: report.issuer ?? null, alignments: report.alignments ?? [] })
 })

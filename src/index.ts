@@ -14,6 +14,7 @@ import wallet from './routes/wallet'
 import records from './routes/records'
 import issuers from './routes/issuers'
 import exportRoutes from './routes/export'
+import mcp from './routes/mcp'
 
 export interface Bindings {
   DB: D1Database
@@ -34,9 +35,10 @@ app.route('/w', records)
 app.route('/issuers', issuers)
 // Sovereignty: the holder leaves with a signed bundle of everything.
 app.route('/w', exportRoutes)
+// Agent surface: JSON-RPC MCP over the same scoped API keys + consent gate.
+app.route('/mcp', mcp)
 
 // TODO (roots P1) — remaining lifted surface:
 //   app.route('/w', wallets)              // POST /w (create + bind IdP), GET /w/:id/did.json(l)
-//   app.route('/mcp', mcp)                // agent surface (lifted)
 
 export default app
