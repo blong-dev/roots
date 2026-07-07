@@ -10,11 +10,31 @@ binding = "DB"
 database_name = "roots"
 database_id = "TODO-run-wrangler-d1-create-roots"
 
-# Secrets Store KEK — encrypts issuer/receiver private keys + per-wallet data keys.
-# Provision before first deploy (mirrors Telekora's TELEKORA_KEK).
-# [[secrets_store_secrets]]
-# binding = "ROOTS_KEK"
-# store_id = "TODO"
-# secret_name = "ROOTS_KEK"
+# The DID anchor + public surface. did:web:id.dreamtree.org:... resolves here
+# (this worker serves /w/:id/did.json, /tenants/:tid/did.json). Requires the
+# dreamtree.org zone on this Cloudflare account with an `id` DNS record.
+[[routes]]
+pattern = "id.dreamtree.org"
+custom_domain = true
 
-# ROOTS_OPS_TOKEN (operator bearer) is a plain wrangler secret:  wrangler secret put ROOTS_OPS_TOKEN
+# Secrets Store KEK — wraps issuer/receiver private keys + per-wallet data keys.
+# Reuses the account Secrets Store (same store_id as Telekora's KEK). Provision
+# the secret first:  wrangler secrets-store secret create <store_id> --name ROOTS_KEK
+[[secrets_store_secrets]]
+binding = "ROOTS_KEK"
+store_id = "54b795092820404995e1b30e45118244"
+secret_name = "ROOTS_KEK"
+
+# During a KEK rotation only: provision ROOTS_KEK_NEXT, uncomment, deploy, POST
+# /admin/kek/rotate, then set ROOTS_KEK := this value and re-comment.
+# [[secrets_store_secrets]]
+# binding = "ROOTS_KEK_NEXT"
+# store_id = "54b795092820404995e1b30e45118244"
+# secret_name = "ROOTS_KEK_NEXT"
+
+# Plain wrangler secrets (not Secrets Store):
+#   wrangler secret put ROOTS_OPS_TOKEN            # owner break-glass (>=24 random chars)
+#   wrangler secret put ROOTS_DELEGATION_ISSUERS   # CSV of DIDs allowed to vouch (Telekora's issuer DID)
+# Enable the mTLS second factor once API Shield is configured (see deploy-readiness.md):
+#   wrangler secret put ROOTS_REQUIRE_MTLS         # any non-empty value turns it on
+#   wrangler secret put ROOTS_MTLS_FINGERPRINTS    # optional CSV of allowed client-cert SHA-256 fingerprints

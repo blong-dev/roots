@@ -4,27 +4,36 @@ Status as of the pre-deploy security audit. roots is **not yet deployed**
 (`wrangler.toml` still has `database_id = TODO`). This is the checklist + the
 known-posture record for when we go live.
 
-## Pre-deploy prerequisites (blocking)
+## Deploy runbook
 
-1. **Create the D1 database** and paste its id into `wrangler.toml`:
-   `wrangler d1 create roots` → copy `database_id`.
-2. **Apply all migrations** to the remote DB (0001–0007), in order.
-3. **Provision secrets:**
-   - `ROOTS_KEK` — 32 random bytes, base64, in **Secrets Store** (not a plain
-     var). Wraps every private key AND every per-wallet data key. *If this is
-     ever lost, all encrypted payloads and signing keys are unrecoverable.* Back
-     it up out-of-band.
-   - `ROOTS_OPS_TOKEN` — `wrangler secret put` (≥24 chars, random). Owner
-     break-glass for holder routes; not per-user.
-   - `ROOTS_DELEGATION_ISSUERS` — CSV of DIDs allowed to vouch for holders
-     (Telekora's issuer DID). **Unset = deny-all delegation** (fail-closed).
-4. **DID resolution routing — easy to miss.** Wallet + issuer DIDs are
-   `did:web:dreamtree.org:...`. For them to resolve *externally* (so exported
-   proofs and issued credentials verify off-box), `https://dreamtree.org/w/<id>/did.json`
-   and `https://dreamtree.org/tenants/<t>/did.json` must reach this worker. Either
-   deploy/route the worker under `dreamtree.org`, or change `DID_WEB_DOMAIN`
-   (`src/credentials/keys.ts`) to the actual served domain. Until then, external
-   resolution fails (internal verification via the DB still works).
+Order matters. Steps marked **[dashboard]** need Cloudflare account/DNS actions;
+the rest are CLI.
+
+1. **DNS / zone [dashboard].** `dreamtree.org` must be a zone on this Cloudflare
+   account, with an `id` record. The worker binds `id.dreamtree.org` as a custom
+   domain (`wrangler.toml`); DIDs are `did:web:id.dreamtree.org:...` and resolve
+   here (`/w/:id/did.json`, `/tenants/:t/did.json`). This is the permanent DID
+   anchor — every minted DID carries it forever.
+2. **Create D1:** `wrangler d1 create roots` → paste `database_id` into
+   `wrangler.toml`.
+3. **Provision the KEK [dashboard/CLI]:** create `ROOTS_KEK` (32 random bytes,
+   base64) in the account **Secrets Store** (store id already in `wrangler.toml`).
+   **BACK IT UP out-of-band before anything writes** — losing it makes all keys +
+   encrypted payloads unrecoverable. (Compromise, not loss, is handled by
+   `POST /admin/kek/rotate` + `ROOTS_KEK_NEXT`.)
+4. **Provision plain secrets:** `wrangler secret put ROOTS_OPS_TOKEN` (≥24 random
+   chars) and `ROOTS_DELEGATION_ISSUERS` (Telekora's issuer DID; unset =
+   deny-all delegation, fail-closed).
+5. **Apply migrations** to the remote DB (0001–0008), in order.
+6. **mTLS second factor [dashboard]:** configure Cloudflare **API Shield mTLS** on
+   `id.dreamtree.org` — upload the client-cert CA (or Telekora's cert), enforce
+   client certs. Then `wrangler secret put ROOTS_REQUIRE_MTLS` (any non-empty) and,
+   optionally, `ROOTS_MTLS_FINGERPRINTS` to pin specific consumers. This makes a
+   leaked API key useless on its own. Public routes (DID docs, health, data-types)
+   stay open; only authenticated routes require the cert.
+7. **Rate limiting [dashboard]:** add Cloudflare WAF / rate-limit rules —
+   especially credential-verify + import (outbound `safeFetch`) and `POST /wallets`.
+8. **Deploy:** `wrangler deploy`. Smoke-test `GET /health`, a DID doc, `/data-types`.
 
 ## Audit outcome (fixed before deploy)
 
