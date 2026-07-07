@@ -82,16 +82,16 @@ not a wallet.
    explicit grant from the holder. This is the sovereign default: you see what you
    contributed; cross-contributor reads are the holder's to grant.
 
-   **Requires a roots change (foundational, do first):**
-   - `records.contributor` — the consumer identity that wrote the record. It's
-     already threaded as `actor` into `writeSelfRecord`/`writeCredentialRecord`
-     (goes to `record_events`); persist it on the record row too.
-   - Read grants gain a `scope` — `own` (only records where
-     `contributor = grantee`) vs `all` (cross-contributor, the current behavior).
-     The read query adds `AND contributor = grantee` for an `own`-scoped grant.
-   - Silent-wallet bootstrap auto-issues an `own`-scoped read grant to the creating
-     consumer (alongside the existing write grant), revocable + logged.
-   This is the natural next roots increment; DT-5's read-flip (Stage 3) depends on it.
+   **Roots change — BUILT (`9f1a6a1`, migration 0008):**
+   - `records.contributor` — the consumer that wrote the record (stamped from the
+     `actor` already threaded through the write helpers).
+   - Read grants carry a `scope` — `own` (only `contributor = grantee`) vs `all`
+     (cross-contributor, purpose-gated). `activeReadGrant` treats a NULL purpose as
+     purpose-agnostic (own grants).
+   - Silent-wallet bootstrap auto-issues the creating consumer BOTH a write grant
+     and an `own`-scoped read grant (revocable). Verified: a contributor reads only
+     its own; cross-contributor reads need the holder's explicit `all` grant.
+   Stage 3's read-flip now has its model. The rest of DT-5 is Telekora-side plumbing.
 2. **Delegation signing key.** Telekora signs holder delegations with its existing
    tenant issuer key, or a dedicated platform delegation key? Recommend the
    existing issuer key (already resolvable via did:web; one fewer key to manage).
