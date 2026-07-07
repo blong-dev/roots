@@ -37,11 +37,23 @@ const BLOCKED_HOST =
 // guid:resolve-safeHost
 // guid:c1f0a2b7-8e34-4d19-9a6c-2b7e1f04d8a5
 function hostIsBlocked(hostname: string): boolean {
-  const h = hostname.replace(/^\[|\]$/g, '') // strip IPv6 brackets
+  const h = hostname.replace(/^\[|\]$/g, '').toLowerCase() // strip IPv6 brackets
   if (BLOCKED_HOST.test(hostname)) return true
   if (PRIVATE_IPV4.test(h)) return true
-  // IPv6 loopback / link-local / unique-local.
-  if (h === '::1' || /^fe80:/i.test(h) || /^f[cd][0-9a-f]{2}:/i.test(h)) return true
+  // IPv6 loopback / unspecified / link-local / unique-local.
+  if (h === '::1' || h === '::' || /^fe80:/i.test(h) || /^f[cd][0-9a-f]{2}:/i.test(h)) return true
+  // IPv4-mapped IPv6 — the dotted (::ffff:127.0.0.1) and hex (::ffff:7f00:1)
+  // serializations both smuggle a v4 past the checks above; resolve the embedded
+  // v4 and apply the v4 blocklist, and block any undecodable mapped form.
+  const mappedDotted = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(h)
+  if (mappedDotted) return PRIVATE_IPV4.test(mappedDotted[1])
+  const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h)
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1], 16)
+    const lo = parseInt(mappedHex[2], 16)
+    return PRIVATE_IPV4.test(`${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`)
+  }
+  if (h.includes('::ffff:')) return true
   return false
 }
 

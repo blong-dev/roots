@@ -170,6 +170,38 @@ function tierFor(checks: Check[], registered: boolean): Tier {
   return registered ? 'verified' : 'valid-signature'
 }
 
+/**
+ * Bind the proof key to the NAMED issuer. Without this, a signature that verifies
+ * against an attacker's own key (e.g. a self-contained did:key) while the
+ * credential claims a registered issuer would surface as `verified` — the trust
+ * decision (vc.issuer) and the signature (verificationMethod) weren't tied
+ * together. Conservative heuristic: same DID, same did:web[vh] authority, or same
+ * host. An issuer that signs with a cross-scheme key its own DID document lists
+ * will UNDER-verify (drop to self-reported) — safe, never the reverse.
+ */
+// guid:vx-didBoundToIssuer
+function didBoundToIssuer(vm: string | undefined, issuerId: string | undefined): boolean {
+  if (!vm || !issuerId) return false
+  const vmDid = vm.split('#')[0]
+  if (vmDid === issuerId) return true
+  const authority = (s: string): string | null => {
+    const m = /^did:web(?:vh)?:([^:]+)/.exec(s)
+    if (m) return decodeURIComponent(m[1]).toLowerCase()
+    try { return new URL(s).host.toLowerCase() } catch { return null }
+  }
+  const a = authority(vmDid)
+  const b = authority(issuerId)
+  return !!a && a === b
+}
+
+/** OB2-signed binding: the key document URL and the claimed owner must share a
+ *  host, so a key doc hosted anywhere can't self-assert a trusted `owner`. */
+// guid:vx-sameHost
+function sameHost(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false
+  try { return new URL(a).host.toLowerCase() === new URL(b).host.toLowerCase() } catch { return false }
+}
+
 // ------------------------------------------------------------- status (external)
 /** Read an external BitstringStatusList bit for a credential. false = clear. */
 // guid:vx-statusRevoked
@@ -280,12 +312,17 @@ async function verifyDiCredential(
     checks.push({ name: 'proof', ok: false, detail: 'no supported DataIntegrityProof (eddsa-jcs-2022)' })
     checks.push({ name: 'issuer-resolution', ok: false })
   }
+  // Issuer binding — see didBoundToIssuer. An unbound but otherwise-valid signature
+  // can't be attributed to the issuer it names, so it collapses to self-reported
+  // via tierFor (the failed check), never verified/valid-signature.
+  const bound = didBoundToIssuer(issuerProof?.verificationMethod, issuerId)
+  checks.push({ name: 'issuer-binding', ok: bound, detail: bound ? 'proof key controlled by the named issuer' : 'proof key not bound to the named issuer' })
   // Status + time.
   const st = await statusFlagged(vc.credentialStatus)
   checks.push(statusCheck(st))
   checks.push(timeCheck(vc.validFrom as string | undefined, vc.validUntil as string | undefined))
 
-  const registered = proofOk && (await isRegistered(db, issuerId))
+  const registered = proofOk && bound && (await isRegistered(db, issuerId))
   return {
     tier: tierFor(checks, registered), format: 'vc-di', registered,
     issuer: { id: issuerId, name: issuerName },
@@ -337,13 +374,16 @@ async function verifyJwtCredential(token: string, db: D1Database): Promise<Exter
     { name: 'proof', ok: proofOk, detail: proofOk ? header.alg : 'JWS signature invalid or key unresolved' },
     { name: 'issuer-resolution', ok: !!key, detail: key?.method },
   ]
+  // Issuer binding — the JWS key (kid/iss) must be controlled by the named issuer.
+  const bound = didBoundToIssuer(vm, issuerId)
+  checks.push({ name: 'issuer-binding', ok: bound, detail: bound ? 'proof key controlled by the named issuer' : 'proof key not bound to the named issuer' })
   const st = await statusFlagged(cred.credentialStatus)
   checks.push(statusCheck(st))
   const validUntil = (cred.validUntil as string | undefined) ?? (payload.exp ? new Date(Number(payload.exp) * 1000).toISOString() : undefined)
   const validFrom = (cred.validFrom as string | undefined) ?? (payload.nbf ? new Date(Number(payload.nbf) * 1000).toISOString() : undefined)
   checks.push(timeCheck(validFrom, validUntil))
 
-  const registered = proofOk && (await isRegistered(db, issuerId))
+  const registered = proofOk && bound && (await isRegistered(db, issuerId))
   return {
     tier: tierFor(checks, registered), format: 'vc-jwt', registered,
     issuer: { id: issuerId, name: issuerName },
@@ -448,11 +488,15 @@ async function verifyOb2Signed(
   } catch { /* creator/key unreachable */ }
   checks.push({ name: 'proof', ok: proofOk, detail: proofOk ? 'RS256 over creator publicKeyPem' : 'signed-badge signature invalid or key unreachable' })
   checks.push({ name: 'issuer-resolution', ok: !!issuerId, detail: issuerId ? 'creator key owner' : 'no key owner' })
+  // Issuer binding — the creator key document and its self-asserted `owner` must
+  // share a host, else a key doc hosted anywhere could claim a trusted owner.
+  const bound = sameHost(creator, issuerId)
+  checks.push({ name: 'issuer-binding', ok: bound, detail: bound ? 'key document hosted by the owner domain' : 'key document not same-host as claimed owner' })
   const revoked = payload.revoked === true
   checks.push({ name: 'status', ok: !revoked, detail: revoked ? 'revoked' : 'not revoked' })
   checks.push(timeCheck(payload.issuedOn as string | undefined, payload.expires as string | undefined))
 
-  const registered = proofOk && (await isRegistered(db, issuerId))
+  const registered = proofOk && bound && (await isRegistered(db, issuerId))
   return {
     tier: tierFor(checks, registered), format: 'ob2-signed', registered,
     issuer: { id: issuerId, name: issuerName },
