@@ -53,9 +53,10 @@ no secret leakage; parameterized SQL. Fixed in the audit:
   origin's private network). The app-layer guard blocks literal private IPs +
   known metadata hosts, not a hostname that resolves to a private IP. Fine on
   Workers; would need resolve-then-check if ever run elsewhere.
-- **Encryption is all-or-nothing**, not PII-class-selective. Everything is
-  encrypted at rest today; the `data_type`-driven selective scheme waits on the
-  data_type registry (DT-3 / P2). Current behavior is strictly safe, just coarse.
+- ~~Encryption is all-or-nothing~~ **RESOLVED (P2 / DT-3):** encryption is now
+  selective by the registry's PII class — non-PII types clear + queryable at rest,
+  PII/credential types sealed. Field-level encryption inside partial-PII payloads
+  is the remaining v1 refinement.
 - **did:webvh is v0** — DIDs resolve as `did:web` now; `did.jsonl` is a single
   signed inception entry. Full webvh SCID / entry-hash chain verification is later
   hardening.
