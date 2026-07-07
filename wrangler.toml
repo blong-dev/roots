@@ -8,7 +8,7 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "roots"
-database_id = "TODO-run-wrangler-d1-create-roots"
+database_id = "94a1f052-e588-4d20-896c-259548596dcf"
 
 # The DID anchor + public surface. did:web:id.dreamtree.org:... resolves here
 # (this worker serves /w/:id/did.json, /tenants/:tid/did.json). Requires the
