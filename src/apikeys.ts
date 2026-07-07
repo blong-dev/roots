@@ -17,6 +17,7 @@ export type Scope =
   | 'credentials:import'
   | 'credentials:retract'
   | 'registry:read'
+  | 'wallets:create'
 
 export const ALL_SCOPES: Scope[] = [
   'credentials:verify',
@@ -24,6 +25,7 @@ export const ALL_SCOPES: Scope[] = [
   'credentials:import',
   'credentials:retract',
   'registry:read',
+  'wallets:create',
 ]
 
 export interface ApiKeyRow {
