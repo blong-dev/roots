@@ -42,7 +42,7 @@ app.get('/', (c) => c.html(LANDING_HTML))
 app.get('/stats', async (c) => {
   const row = await c.env.DB.prepare(
     `SELECT (SELECT COUNT(*) FROM wallets) AS wallets,
-            (SELECT COUNT(*) FROM records) AS records,
+            (SELECT COUNT(*) FROM records WHERE state = 'active') AS records,
             (SELECT COUNT(*) FROM issuers) AS issuers`,
   ).first<{ wallets: number; records: number; issuers: number }>()
   return c.json(
