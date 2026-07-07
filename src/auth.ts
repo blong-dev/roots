@@ -90,7 +90,7 @@ async function verifyDelegation(c: Context<Env>, token: string): Promise<Delegat
   const parts = token.split('.')
   if (parts.length !== 3) return null
   let header: { alg?: string; kid?: string }
-  let payload: { iss?: string; sub?: string; wallet?: string; exp?: number }
+  let payload: { iss?: string; sub?: string; wallet?: string; exp?: number; jti?: string }
   try {
     header = JSON.parse(new TextDecoder().decode(b64urlDecode(parts[0])))
     payload = JSON.parse(new TextDecoder().decode(b64urlDecode(parts[1])))
@@ -112,9 +112,19 @@ async function verifyDelegation(c: Context<Env>, token: string): Promise<Delegat
     ok = await crypto.subtle.verify('Ed25519', ck, sig, signingInput)
   }
   if (!ok) return null
-  // Short-lived: a 60s window bounds replay (a jti store is future hardening).
   if (typeof payload.exp !== 'number' || payload.exp < Math.floor(Date.now() / 1000)) return null
-  if (!payload.sub || !payload.wallet) return null
+  if (!payload.sub || !payload.wallet || !payload.jti) return null
+  // Single-use: consume the jti. A replay (jti already seen) is rejected. Reached
+  // only after the signature is valid, so an attacker can't flood this table with
+  // garbage jtis. D1's strong consistency catches replays across Worker isolates.
+  const consumed = await c.env.DB.prepare(
+    'INSERT INTO used_delegations (jti, expires_at) VALUES (?, ?) ON CONFLICT (jti) DO NOTHING',
+  ).bind(payload.jti, payload.exp).run()
+  if (consumed.meta.changes === 0) return null // replay
+  // Opportunistic sweep of expired jtis (bounded by the token TTL).
+  try {
+    await c.env.DB.prepare('DELETE FROM used_delegations WHERE expires_at < ?').bind(Math.floor(Date.now() / 1000)).run()
+  } catch { /* best effort */ }
   return { holder: payload.sub, wallet: payload.wallet, issuer: signerDid }
 }
 
