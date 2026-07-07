@@ -153,7 +153,7 @@ async function isRegistered(db: D1Database, issuerId: string | undefined): Promi
   try { candidates.add(new URL(issuerId).origin) } catch { /* not a URL */ }
   for (const c of candidates) {
     const row = await dbFirst<{ status: string }>(
-      db, 'SELECT status FROM wallet_issuers WHERE did_or_iss = ?', c,
+      db, 'SELECT status FROM issuers WHERE did_or_iss = ?', c,
     )
     if (row?.status === 'trusted') return true
     if (row?.status === 'revoked') return false
