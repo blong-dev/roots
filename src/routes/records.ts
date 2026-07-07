@@ -128,6 +128,37 @@ records.post('/:id/records/:rid/retract', delegatedHolderAuth, (c) => transition
 // guid:roots-records-reinstate
 records.post('/:id/records/:rid/reinstate', delegatedHolderAuth, (c) => transition(c, 'reinstated'))
 
+// ---------------------------------------------------------------- lifecycle (contributor)
+// An attester may withdraw (or reinstate) ITS OWN attestation — append-only, the
+// actor recorded as the consumer. It cannot touch another contributor's records;
+// the holder's own retract (above) covers everything.
+// guid:roots-records-retract-contribution
+records.post('/:id/records/:rid/retract-contribution', consumerAuth, requireScope('credentials:retract'), (c) => contributorTransition(c, 'retracted'))
+// guid:roots-records-reinstate-contribution
+records.post('/:id/records/:rid/reinstate-contribution', consumerAuth, requireScope('credentials:retract'), (c) => contributorTransition(c, 'reinstated'))
+
+// guid:roots-records-contributorTransition
+async function contributorTransition(c: Context<Env>, event: 'retracted' | 'reinstated'): Promise<Response> {
+  const walletId = c.req.param('id')!
+  const rid = c.req.param('rid')!
+  const consumer = c.get('reader')!
+  const rec = await loadRecord(c.env.DB, walletId, rid)
+  if (!rec) return c.json({ error: 'not found' }, 404)
+  if (rec.contributor !== consumer) return c.json({ error: 'not your contribution' }, 403)
+  const from = event === 'retracted' ? 'active' : 'retracted'
+  const to = event === 'retracted' ? 'retracted' : 'active'
+  if (rec.state !== from) return c.json({ error: `record is already ${rec.state}` }, 409)
+  const b = await c.req.json<{ reason?: string }>().catch(() => null)
+  const reason = typeof b?.reason === 'string' ? b.reason.slice(0, 500) : null
+  await c.env.DB.batch([
+    c.env.DB.prepare(`UPDATE records SET state = ?, updated_at = datetime('now') WHERE id = ? AND wallet_id = ?`)
+      .bind(to, rid, walletId),
+    c.env.DB.prepare(`INSERT INTO record_events (id, record_id, event, reason, actor) VALUES (?, ?, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), rid, event, reason, consumer),
+  ])
+  return c.json({ ok: true, id: rid, state: to, event, actor: consumer })
+}
+
 // guid:roots-records-transition — a mis-written record is never deleted; it is
 // retracted by APPENDING an event and flipping the materialized state.
 async function transition(c: Context<Env>, event: 'retracted' | 'reinstated'): Promise<Response> {

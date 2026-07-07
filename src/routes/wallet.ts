@@ -17,6 +17,8 @@ import { consumerAuth, delegatedHolderAuth, requireScope } from '../auth'
 import { activeReadGrant, logAccess } from '../grants'
 import { dbFirst, dbRun } from '../db'
 import { decryptRecords } from '../wallet-crypto'
+import { lookupDataType } from '../data-types'
+import { verifyExternal, type ExternalInput } from '../credentials/verify-external'
 
 const wallet = new Hono<Env>()
 
@@ -39,22 +41,49 @@ wallet.get('/:id/records', consumerAuth, requireScope('credentials:read'), async
     return c.json({ error: 'no live grant for this wallet + data_type + purpose' }, 403)
   }
 
-  // An 'own'-scoped grant reads only what this grantee contributed.
+  // An 'own'-scoped grant reads only what this grantee contributed. Optional
+  // &source_ref= narrows to one contributed record (consumer detail lookups).
   const ownFilter = grant.scope === 'own' ? 'AND contributor = ?' : ''
+  const srcRef = c.req.query('source_ref')?.trim()
+  const refFilter = srcRef ? 'AND source_ref = ?' : ''
   const stmt = c.env.DB.prepare(
     `SELECT id, data_type, payload, encrypted, source_type, source_ref, issuer_id, alignment_json, created_at, updated_at
        FROM records
-      WHERE wallet_id = ? AND data_type = ? AND state = 'active' ${ownFilter}
+      WHERE wallet_id = ? AND data_type = ? AND state = 'active' ${ownFilter} ${refFilter}
       ORDER BY created_at DESC`,
   )
-  const { results } = await (grant.scope === 'own' ? stmt.bind(walletId, dataType, reader) : stmt.bind(walletId, dataType))
-    .all<Record<string, unknown>>()
+  const binds: unknown[] = [walletId, dataType]
+  if (grant.scope === 'own') binds.push(reader)
+  if (srcRef) binds.push(srcRef)
+  const { results } = await stmt.bind(...binds).all<Record<string, unknown>>()
 
   // Decrypt at-rest payloads for this authorized (granted) consumer.
-  const records = await decryptRecords(c.env, walletId, results)
+  let records = await decryptRecords(c.env, walletId, results)
   if (records === null) {
     return c.json({ error: 'record decryption unavailable (ROOTS_KEK not provisioned)' }, 503)
   }
+
+  // &verify=1 — the tier is a READING, never stored: recompute each credential
+  // record's report (proof, issuer resolution, registry standing) at read time
+  // and attach the display facts. Capped to keep subrequests bounded; DID docs
+  // are edge-cached by their issuers, so re-verification stays cheap.
+  if (c.req.query('verify') === '1') {
+    const cap = 25
+    records = await Promise.all(records.map(async (r, i) => {
+      if (lookupDataType(String(r.data_type))?.kind !== 'credential' || i >= cap) return r
+      const p = String(r.payload ?? '').trim()
+      let input: ExternalInput | null = null
+      if (/^eyJ[\w-]+\.[\w-]+\.[\w-]+$/.test(p)) input = { kind: 'jwt', token: p }
+      else { try { input = { kind: 'json', doc: JSON.parse(p) } } catch { input = null } }
+      if (!input) return { ...r, tier: 'self-reported' }
+      const rep = await verifyExternal(input, c.env.DB)
+      return {
+        ...r, tier: rep.tier, issuer_did_or_iss: rep.issuer?.id ?? null, issuer_name: rep.issuer?.name ?? null,
+        credential_name: rep.credentialName ?? null, issued_at: rep.issuedAt ?? null, expires_at: rep.expiresAt ?? null,
+      }
+    }))
+  }
+
   await logAccess(c.env.DB, { walletId, reader, dataType, purpose, outcome: 'allowed' })
   return c.json({ wallet_id: walletId, data_type: dataType, purpose, records })
 })
