@@ -17,7 +17,8 @@ import issuers from './routes/issuers'
 export interface Bindings {
   DB: D1Database
   ROOTS_KEK?: { get(): Promise<string> } // Secrets Store: KEK for issuer/receiver privkeys + per-wallet data keys
-  ROOTS_OPS_TOKEN?: string // operator bearer (lifted pattern) for headless management
+  ROOTS_OPS_TOKEN?: string // operator bearer — owner break-glass for holder routes
+  ROOTS_DELEGATION_ISSUERS?: string // CSV of DIDs allowed to vouch for holders (e.g. did:web:telekora.com)
 }
 
 const app = new Hono<{ Bindings: Bindings }>()

@@ -8,11 +8,12 @@
  *   GET  /w/:id/access-log                    owner: every read + denied attempt
  *
  * Reads are authorized PER READ against a live grant — never a session. The
- * owner routes are operator-gated for now (see auth.ts: interim holder auth).
+ * owner routes use delegatedHolderAuth (a Telekora-signed per-user assertion;
+ * operator token only as owner break-glass — see auth.ts).
  */
 import { Hono } from 'hono'
 import type { Env } from '../auth'
-import { consumerAuth, operatorAuth, requireScope } from '../auth'
+import { consumerAuth, delegatedHolderAuth, requireScope } from '../auth'
 import { activeGrant, logAccess } from '../grants'
 import { dbFirst, dbRun } from '../db'
 
@@ -52,7 +53,7 @@ wallet.get('/:id/records', consumerAuth, requireScope('credentials:read'), async
 
 // ---------------------------------------------------------------- owner: grant
 // guid:roots-wallet-grant-create
-wallet.post('/:id/grants', operatorAuth, async (c) => {
+wallet.post('/:id/grants', delegatedHolderAuth, async (c) => {
   const walletId = c.req.param('id')
   const b = await c.req.json<{ reader?: string; data_type?: string; purpose?: string }>().catch(() => null)
   const reader = b?.reader?.trim()
@@ -66,13 +67,13 @@ wallet.post('/:id/grants', operatorAuth, async (c) => {
     c.env.DB,
     `INSERT INTO grants (id, wallet_id, reader, data_type, purpose, granted_by)
      VALUES (?, ?, ?, ?, ?, ?)`,
-    id, walletId, reader, dataType, purpose, 'operator',
+    id, walletId, reader, dataType, purpose, c.get('holder') ?? 'operator',
   )
   return c.json({ ok: true, id, wallet_id: walletId, reader, data_type: dataType, purpose })
 })
 
 // guid:roots-wallet-grant-revoke — append-only: stamp revoked_at, never delete
-wallet.post('/:id/grants/:gid/revoke', operatorAuth, async (c) => {
+wallet.post('/:id/grants/:gid/revoke', delegatedHolderAuth, async (c) => {
   const res = await c.env.DB.prepare(
     `UPDATE grants SET revoked_at = datetime('now')
       WHERE id = ? AND wallet_id = ? AND revoked_at IS NULL`,
@@ -82,7 +83,7 @@ wallet.post('/:id/grants/:gid/revoke', operatorAuth, async (c) => {
 })
 
 // guid:roots-wallet-grant-list
-wallet.get('/:id/grants', operatorAuth, async (c) => {
+wallet.get('/:id/grants', delegatedHolderAuth, async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT id, reader, data_type, purpose, granted_at, revoked_at, granted_by
        FROM grants WHERE wallet_id = ? ORDER BY granted_at DESC`,
@@ -91,7 +92,7 @@ wallet.get('/:id/grants', operatorAuth, async (c) => {
 })
 
 // guid:roots-wallet-access-log — the owner's window into every read + denial
-wallet.get('/:id/access-log', operatorAuth, async (c) => {
+wallet.get('/:id/access-log', delegatedHolderAuth, async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT reader, data_type, purpose, outcome, at
        FROM access_log WHERE wallet_id = ? ORDER BY at DESC LIMIT 500`,

@@ -13,8 +13,10 @@
 import type { Context, Next } from 'hono'
 import type { Bindings } from './index'
 import { resolveApiKey } from './apikeys'
+import { resolveIssuerKey } from './credentials/resolve'
+import { ed25519Verify } from './credentials/keys'
 
-export type Vars = { reader?: string; scopes?: Set<string>; isOperator?: boolean }
+export type Vars = { reader?: string; scopes?: Set<string>; isOperator?: boolean; holder?: string }
 export type Env = { Bindings: Bindings; Variables: Vars }
 
 // guid:roots-auth-bearer
@@ -60,4 +62,78 @@ export async function operatorAuth(c: Context<Env>, next: Next): Promise<Respons
   }
   c.set('isOperator', true)
   await next()
+}
+
+// ---------------------------------------------------------------- delegated holder auth
+// The real per-user holder path. A trusted consumer (Telekora) authenticates
+// the human, then signs a short-lived assertion "user U owns wallet W". roots
+// verifies it with the SAME crypto the credential verifier uses (did:web/did:key
+// resolution + Ed25519), so no new trust root and no roots-side IdP. Only DIDs
+// in ROOTS_DELEGATION_ISSUERS may vouch — a scope distinct from the credential
+// trust registry. Replaces the operator god-token as the holder mechanism; the
+// operator token is kept only as owner break-glass.
+export interface Delegation { holder: string; wallet: string; issuer: string }
+
+// guid:roots-auth-b64urlDecode
+function b64urlDecode(s: string): Uint8Array {
+  const pad = s.length % 4 === 2 ? '==' : s.length % 4 === 3 ? '=' : ''
+  const bin = atob(s.replace(/-/g, '+').replace(/_/g, '/') + pad)
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
+}
+
+// guid:roots-auth-verifyDelegation
+async function verifyDelegation(c: Context<Env>, token: string): Promise<Delegation | null> {
+  const allow = (c.env.ROOTS_DELEGATION_ISSUERS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  if (!allow.length) return null // deny-all unless explicitly configured
+  const parts = token.split('.')
+  if (parts.length !== 3) return null
+  let header: { alg?: string; kid?: string }
+  let payload: { iss?: string; sub?: string; wallet?: string; exp?: number }
+  try {
+    header = JSON.parse(new TextDecoder().decode(b64urlDecode(parts[0])))
+    payload = JSON.parse(new TextDecoder().decode(b64urlDecode(parts[1])))
+  } catch { return null }
+  if (header.alg !== 'EdDSA') return null
+  const vm = header.kid ?? payload.iss
+  if (!vm) return null
+  const signerDid = vm.split('#')[0]
+  // Only an allowlisted party may vouch, and it must sign as itself.
+  if (!allow.includes(signerDid) || (payload.iss && payload.iss !== signerDid)) return null
+  const key = await resolveIssuerKey(vm, c.env.DB)
+  if (!key) return null
+  const signingInput = new TextEncoder().encode(`${parts[0]}.${parts[1]}`)
+  const sig = b64urlDecode(parts[2])
+  let ok = false
+  if (key.raw) ok = await ed25519Verify(key.raw, signingInput, sig)
+  else if (key.jwk) {
+    const ck = await crypto.subtle.importKey('jwk', key.jwk, { name: 'Ed25519' }, false, ['verify'])
+    ok = await crypto.subtle.verify('Ed25519', ck, sig, signingInput)
+  }
+  if (!ok) return null
+  // Short-lived: a 60s window bounds replay (a jti store is future hardening).
+  if (typeof payload.exp !== 'number' || payload.exp < Math.floor(Date.now() / 1000)) return null
+  if (!payload.sub || !payload.wallet) return null
+  return { holder: payload.sub, wallet: payload.wallet, issuer: signerDid }
+}
+
+// guid:roots-auth-delegatedHolder
+export async function delegatedHolderAuth(c: Context<Env>, next: Next): Promise<Response | void> {
+  const del = c.req.header('x-roots-delegation')
+  if (del) {
+    const d = await verifyDelegation(c, del.trim())
+    if (!d) return c.json({ error: 'invalid holder delegation' }, 401)
+    if (d.wallet !== c.req.param('id')) return c.json({ error: 'delegation not scoped to this wallet' }, 403)
+    c.set('holder', d.holder)
+    return await next()
+  }
+  // Owner break-glass: the platform operator acting headlessly (not per-user).
+  const tok = c.env.ROOTS_OPS_TOKEN
+  const got = bearer(c)
+  if (tok && tok.length >= 24 && got && ctEq(got, tok)) {
+    c.set('holder', 'operator')
+    return await next()
+  }
+  return c.json({ error: 'holder delegation or operator break-glass required' }, 401)
 }

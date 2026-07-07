@@ -10,14 +10,14 @@
  *   GET  /w/:id/records/:rid            record detail (owner)
  *
  * Writes are consumer-authed (credentials:import — the interim write scope;
- * records:write lands in the scope rename). Lifecycle + detail are operator-gated
- * (a holder action) until holder sessions ship. The verification TIER is never
- * stored — it is recomputed as a reading over the stored VC + current registry.
+ * records:write lands in the scope rename). Lifecycle + detail use
+ * delegatedHolderAuth (per-user; operator break-glass). The verification TIER is
+ * never stored — it is recomputed as a reading over the stored VC + registry.
  */
 import { Hono, type Context } from 'hono'
 import type { D1Database } from '@cloudflare/workers-types'
 import type { Env } from '../auth'
-import { consumerAuth, operatorAuth, requireScope } from '../auth'
+import { consumerAuth, delegatedHolderAuth, requireScope } from '../auth'
 import { dbFirst, dbRun } from '../db'
 import { verifyExternal, type ExternalInput, type ManualMeta } from '../credentials/verify-external'
 
@@ -119,7 +119,7 @@ records.post('/:id/credentials', consumerAuth, requireScope('credentials:import'
 
 // ---------------------------------------------------------------- verify (tier reading)
 // guid:roots-records-verify
-records.get('/:id/records/:rid/verify', operatorAuth, async (c) => {
+records.get('/:id/records/:rid/verify', delegatedHolderAuth, async (c) => {
   const rec = await loadRecord(c.env.DB, c.req.param('id')!, c.req.param('rid')!)
   if (!rec) return c.json({ error: 'not found' }, 404)
   const p = String(rec.payload ?? '').trim()
@@ -132,9 +132,9 @@ records.get('/:id/records/:rid/verify', operatorAuth, async (c) => {
 
 // ---------------------------------------------------------------- lifecycle (owner)
 // guid:roots-records-retract
-records.post('/:id/records/:rid/retract', operatorAuth, (c) => transition(c, 'retracted'))
+records.post('/:id/records/:rid/retract', delegatedHolderAuth, (c) => transition(c, 'retracted'))
 // guid:roots-records-reinstate
-records.post('/:id/records/:rid/reinstate', operatorAuth, (c) => transition(c, 'reinstated'))
+records.post('/:id/records/:rid/reinstate', delegatedHolderAuth, (c) => transition(c, 'reinstated'))
 
 // guid:roots-records-transition — a mis-written record is never deleted; it is
 // retracted by APPENDING an event and flipping the materialized state.
@@ -151,14 +151,14 @@ async function transition(c: Context<Env>, event: 'retracted' | 'reinstated'): P
   await c.env.DB.batch([
     c.env.DB.prepare(`UPDATE records SET state = ?, updated_at = datetime('now') WHERE id = ? AND wallet_id = ?`)
       .bind(to, rid, walletId),
-    c.env.DB.prepare(`INSERT INTO record_events (id, record_id, event, reason, actor) VALUES (?, ?, ?, ?, 'operator')`)
-      .bind(crypto.randomUUID(), rid, event, reason),
+    c.env.DB.prepare(`INSERT INTO record_events (id, record_id, event, reason, actor) VALUES (?, ?, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), rid, event, reason, c.get('holder') ?? 'operator'),
   ])
   return c.json({ ok: true, id: rid, state: to, event })
 }
 
 // guid:roots-records-history
-records.get('/:id/records/:rid/history', operatorAuth, async (c) => {
+records.get('/:id/records/:rid/history', delegatedHolderAuth, async (c) => {
   const rec = await loadRecord(c.env.DB, c.req.param('id')!, c.req.param('rid')!)
   if (!rec) return c.json({ error: 'not found' }, 404)
   const { results } = await c.env.DB.prepare(
@@ -168,7 +168,7 @@ records.get('/:id/records/:rid/history', operatorAuth, async (c) => {
 })
 
 // guid:roots-records-detail
-records.get('/:id/records/:rid', operatorAuth, async (c) => {
+records.get('/:id/records/:rid', delegatedHolderAuth, async (c) => {
   const rec = await loadRecord(c.env.DB, c.req.param('id')!, c.req.param('rid')!)
   if (!rec) return c.json({ error: 'not found' }, 404)
   return c.json({ record: rec })
