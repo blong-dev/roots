@@ -22,6 +22,7 @@ import { dbFirst } from '../db'
 import { verifyExternal, type ExternalInput } from '../credentials/verify-external'
 import { walletExists, toExternalInput, writeSelfRecord, writeCredentialRecord } from '../records-core'
 import { activeWriteGrant } from '../grants'
+import { resolveKek, getWalletDataKey, openPayload } from '../wallet-crypto'
 
 const records = new Hono<Env>()
 
@@ -45,9 +46,12 @@ records.post('/:id/records', consumerAuth, requireScope('credentials:import'), a
   if (!(await activeWriteGrant(c.env.DB, walletId, consumer, dataType))) {
     return c.json({ error: 'no live write grant for this consumer + wallet + data_type' }, 403)
   }
+  const kek = await resolveKek(c.env)
+  if (!kek) return c.json({ error: 'record encryption unavailable (ROOTS_KEK not provisioned)' }, 503)
+  const dataKeyB64 = await getWalletDataKey(c.env.DB, kek, walletId)
   const sourceType = b.source_type === 'tool' ? 'tool' : 'self'
   const { id } = await writeSelfRecord(c.env.DB, {
-    walletId, dataType, payload: b.payload, sourceType, sourceRef: b.source_ref ?? null, actor: consumer,
+    walletId, dataType, payload: b.payload, sourceType, sourceRef: b.source_ref ?? null, actor: consumer, dataKeyB64,
   })
   return c.json({ ok: true, id, data_type: dataType, source_type: sourceType })
 })
@@ -64,20 +68,37 @@ records.post('/:id/credentials', consumerAuth, requireScope('credentials:import'
   if (!(await activeWriteGrant(c.env.DB, walletId, consumer, 'credential'))) {
     return c.json({ error: 'no live write grant for this consumer + wallet' }, 403)
   }
+  const kek = await resolveKek(c.env)
+  if (!kek) return c.json({ error: 'record encryption unavailable (ROOTS_KEK not provisioned)' }, 503)
+  const dataKeyB64 = await getWalletDataKey(c.env.DB, kek, walletId)
   const sourceType = body?.source_type === 'issued' ? 'issued' : 'imported'
   const { id, report } = await writeCredentialRecord(c.env.DB, {
-    walletId, input, sourceType, actor: consumer,
+    walletId, input, sourceType, actor: consumer, dataKeyB64,
   })
   // tier is a reading — returned for convenience, never stored.
   return c.json({ ok: true, id, tier: report.tier, issuer: report.issuer ?? null, alignments: report.alignments ?? [] })
 })
 
+// Decrypt a record's stored payload for an authorized (holder) reader. Returns
+// null only if the record is encrypted and the KEK is unavailable.
+async function plaintextPayload(c: Context<Env>, walletId: string, rec: Record<string, unknown>): Promise<string | null> {
+  const stored = String(rec.payload ?? '')
+  if (!rec.encrypted) return stored
+  const kek = await resolveKek(c.env)
+  if (!kek) return null
+  const dataKey = await getWalletDataKey(c.env.DB, kek, walletId)
+  return await openPayload(dataKey, stored)
+}
+
 // ---------------------------------------------------------------- verify (tier reading)
 // guid:roots-records-verify
 records.get('/:id/records/:rid/verify', delegatedHolderAuth, async (c) => {
-  const rec = await loadRecord(c.env.DB, c.req.param('id')!, c.req.param('rid')!)
+  const walletId = c.req.param('id')!
+  const rec = await loadRecord(c.env.DB, walletId, c.req.param('rid')!)
   if (!rec) return c.json({ error: 'not found' }, 404)
-  const p = String(rec.payload ?? '').trim()
+  const pt = await plaintextPayload(c, walletId, rec)
+  if (pt === null) return c.json({ error: 'record decryption unavailable (ROOTS_KEK not provisioned)' }, 503)
+  const p = pt.trim()
   let input: ExternalInput
   if (/^eyJ[\w-]+\.[\w-]+\.[\w-]+$/.test(p)) input = { kind: 'jwt', token: p }
   else { try { input = { kind: 'json', doc: JSON.parse(p) } } catch { return c.json({ error: 'record payload is not a verifiable credential' }, 400) } }
@@ -124,9 +145,12 @@ records.get('/:id/records/:rid/history', delegatedHolderAuth, async (c) => {
 
 // guid:roots-records-detail
 records.get('/:id/records/:rid', delegatedHolderAuth, async (c) => {
-  const rec = await loadRecord(c.env.DB, c.req.param('id')!, c.req.param('rid')!)
+  const walletId = c.req.param('id')!
+  const rec = await loadRecord(c.env.DB, walletId, c.req.param('rid')!)
   if (!rec) return c.json({ error: 'not found' }, 404)
-  return c.json({ record: rec })
+  const pt = await plaintextPayload(c, walletId, rec)
+  if (pt === null) return c.json({ error: 'record decryption unavailable (ROOTS_KEK not provisioned)' }, 503)
+  return c.json({ record: { ...rec, payload: pt } })
 })
 
 export default records

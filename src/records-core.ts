@@ -8,6 +8,7 @@
 import type { D1Database } from '@cloudflare/workers-types'
 import { dbFirst, dbRun } from './db'
 import { verifyExternal, type ExternalInput, type ExternalReport, type ManualMeta } from './credentials/verify-external'
+import { sealPayload } from './wallet-crypto'
 
 // guid:records-core-walletExists
 export async function walletExists(db: D1Database, id: string): Promise<boolean> {
@@ -47,13 +48,14 @@ export async function upsertIssuer(db: D1Database, didOrIss: string, name: strin
 // guid:records-core-writeSelfRecord
 export async function writeSelfRecord(
   db: D1Database,
-  p: { walletId: string; dataType: string; payload: unknown; sourceType: 'self' | 'tool'; sourceRef?: string | null; actor: string },
+  p: { walletId: string; dataType: string; payload: unknown; sourceType: 'self' | 'tool'; sourceRef?: string | null; actor: string; dataKeyB64: string },
 ): Promise<{ id: string }> {
   const id = crypto.randomUUID()
   const payloadStr = typeof p.payload === 'string' ? p.payload : JSON.stringify(p.payload)
+  const sealed = await sealPayload(p.dataKeyB64, payloadStr)
   await db.batch([
-    db.prepare(`INSERT INTO records (id, wallet_id, data_type, payload, source_type, source_ref) VALUES (?, ?, ?, ?, ?, ?)`)
-      .bind(id, p.walletId, p.dataType, payloadStr, p.sourceType, p.sourceRef ?? null),
+    db.prepare(`INSERT INTO records (id, wallet_id, data_type, payload, encrypted, source_type, source_ref) VALUES (?, ?, ?, ?, 1, ?, ?)`)
+      .bind(id, p.walletId, p.dataType, sealed, p.sourceType, p.sourceRef ?? null),
     db.prepare(`INSERT INTO record_events (id, record_id, event, actor) VALUES (?, ?, 'created', ?)`)
       .bind(crypto.randomUUID(), id, p.actor),
   ])
@@ -63,20 +65,21 @@ export async function writeSelfRecord(
 // guid:records-core-writeCredentialRecord
 export async function writeCredentialRecord(
   db: D1Database,
-  p: { walletId: string; input: ExternalInput; sourceType: 'issued' | 'imported'; actor: string },
+  p: { walletId: string; input: ExternalInput; sourceType: 'issued' | 'imported'; actor: string; dataKeyB64: string },
 ): Promise<{ id: string; report: ExternalReport }> {
   const report = await verifyExternal(p.input, db)
   const issuerId = report.issuer?.id ? await upsertIssuer(db, report.issuer.id, report.issuer.name ?? null) : null
   const payload = p.input.kind === 'jwt' ? p.input.token
     : p.input.kind === 'json' ? JSON.stringify(p.input.doc)
     : JSON.stringify(p.input.meta ?? {})
+  const sealed = await sealPayload(p.dataKeyB64, payload)
   const alignmentJson = report.alignments && report.alignments.length ? JSON.stringify(report.alignments) : null
   const id = crypto.randomUUID()
   await db.batch([
     db.prepare(
-      `INSERT INTO records (id, wallet_id, data_type, payload, source_type, issuer_id, alignment_json)
-       VALUES (?, ?, 'credential', ?, ?, ?, ?)`,
-    ).bind(id, p.walletId, payload, p.sourceType, issuerId, alignmentJson),
+      `INSERT INTO records (id, wallet_id, data_type, payload, encrypted, source_type, issuer_id, alignment_json)
+       VALUES (?, ?, 'credential', ?, 1, ?, ?, ?)`,
+    ).bind(id, p.walletId, sealed, p.sourceType, issuerId, alignmentJson),
     db.prepare(`INSERT INTO record_events (id, record_id, event, actor) VALUES (?, ?, ?, ?)`)
       .bind(crypto.randomUUID(), id, p.sourceType === 'issued' ? 'issued' : 'imported', p.actor),
   ])

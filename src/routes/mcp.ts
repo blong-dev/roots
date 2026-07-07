@@ -20,6 +20,9 @@ import { resolveApiKey, type ResolvedApiKey } from '../apikeys'
 import { verifyExternal, type ExternalInput } from '../credentials/verify-external'
 import { activeReadGrant, activeWriteGrant, logAccess } from '../grants'
 import { writeSelfRecord, writeCredentialRecord, walletExists } from '../records-core'
+import { resolveKek, getWalletDataKey, decryptRecords } from '../wallet-crypto'
+
+type Bindings = Env['Bindings']
 
 const PROTOCOL_VERSION = '2025-06-18'
 const SERVER_INFO = { name: 'roots-wallet', version: '1.0.0' }
@@ -31,7 +34,7 @@ interface Tool {
   scope: string
   description: string
   inputSchema: Record<string, unknown>
-  run: (db: Env['Bindings']['DB'], key: ResolvedApiKey, args: Record<string, unknown>) => Promise<unknown>
+  run: (env: Bindings, key: ResolvedApiKey, args: Record<string, unknown>) => Promise<unknown>
 }
 
 // guid:roots-mcp-inputFrom
@@ -61,10 +64,10 @@ const TOOLS: Tool[] = [
         jwt: { type: 'string', description: 'Alternatively, a compact JWS credential.' },
       },
     },
-    run: async (db, _key, args) => {
+    run: async (env, _key, args) => {
       const input = inputFrom(args)
       if (!input) throw new Error('provide `credential` (VC/Open Badge JSON) or `jwt`')
-      return await verifyExternal(input, db)
+      return await verifyExternal(input, env.DB)
     },
   },
   {
@@ -80,21 +83,23 @@ const TOOLS: Tool[] = [
         purpose: { type: 'string', description: 'the declared purpose, matched against the grant' },
       },
     },
-    run: async (db, key, args) => {
+    run: async (env, key, args) => {
       const walletId = str(args.wallet_id), dataType = str(args.data_type), purpose = str(args.purpose)
       if (!walletId || !dataType || !purpose) throw new Error('wallet_id, data_type and purpose are required — reads are scoped, not blanket')
       const reader = key.tenantId
-      const grant = await activeReadGrant(db, walletId, reader, dataType, purpose)
+      const grant = await activeReadGrant(env.DB, walletId, reader, dataType, purpose)
       if (!grant) {
-        await logAccess(db, { walletId, reader, dataType, purpose, outcome: 'denied' })
+        await logAccess(env.DB, { walletId, reader, dataType, purpose, outcome: 'denied' })
         return { error: 'no live grant for this wallet + data_type + purpose', records: [] }
       }
-      const { results } = await db.prepare(
+      const { results } = await env.DB.prepare(
         `SELECT id, data_type, payload, encrypted, source_type, issuer_id, alignment_json, created_at, updated_at
            FROM records WHERE wallet_id = ? AND data_type = ? AND state = 'active' ORDER BY created_at DESC`,
-      ).bind(walletId, dataType).all()
-      await logAccess(db, { walletId, reader, dataType, purpose, outcome: 'allowed' })
-      return { wallet_id: walletId, data_type: dataType, purpose, records: results }
+      ).bind(walletId, dataType).all<Record<string, unknown>>()
+      const records = await decryptRecords(env, walletId, results)
+      if (records === null) return { error: 'record decryption unavailable (ROOTS_KEK not provisioned)', records: [] }
+      await logAccess(env.DB, { walletId, reader, dataType, purpose, outcome: 'allowed' })
+      return { wallet_id: walletId, data_type: dataType, purpose, records }
     },
   },
   {
@@ -111,14 +116,17 @@ const TOOLS: Tool[] = [
         source_type: { type: 'string', enum: ['self', 'tool'], description: "defaults to 'self'" },
       },
     },
-    run: async (db, key, args) => {
+    run: async (env, key, args) => {
       const walletId = str(args.wallet_id), dataType = str(args.data_type)
       if (!walletId || !dataType) throw new Error('wallet_id and data_type are required')
       if (args.payload === undefined || args.payload === null) throw new Error('payload is required')
-      if (!(await walletExists(db, walletId))) throw new Error('wallet not found')
-      if (!(await activeWriteGrant(db, walletId, key.tenantId, dataType))) throw new Error('no live write grant for this consumer + wallet + data_type')
+      if (!(await walletExists(env.DB, walletId))) throw new Error('wallet not found')
+      if (!(await activeWriteGrant(env.DB, walletId, key.tenantId, dataType))) throw new Error('no live write grant for this consumer + wallet + data_type')
+      const kek = await resolveKek(env)
+      if (!kek) throw new Error('record encryption unavailable (ROOTS_KEK not provisioned)')
+      const dataKeyB64 = await getWalletDataKey(env.DB, kek, walletId)
       const sourceType = args.source_type === 'tool' ? 'tool' : 'self'
-      const { id } = await writeSelfRecord(db, { walletId, dataType, payload: args.payload, sourceType, actor: key.tenantId })
+      const { id } = await writeSelfRecord(env.DB, { walletId, dataType, payload: args.payload, sourceType, actor: key.tenantId, dataKeyB64 })
       return { ok: true, id, data_type: dataType, source_type: sourceType }
     },
   },
@@ -137,15 +145,18 @@ const TOOLS: Tool[] = [
         source_type: { type: 'string', enum: ['issued', 'imported'], description: "defaults to 'imported'" },
       },
     },
-    run: async (db, key, args) => {
+    run: async (env, key, args) => {
       const walletId = str(args.wallet_id)
       if (!walletId) throw new Error('wallet_id is required')
-      if (!(await walletExists(db, walletId))) throw new Error('wallet not found')
-      if (!(await activeWriteGrant(db, walletId, key.tenantId, 'credential'))) throw new Error('no live write grant for this consumer + wallet')
+      if (!(await walletExists(env.DB, walletId))) throw new Error('wallet not found')
+      if (!(await activeWriteGrant(env.DB, walletId, key.tenantId, 'credential'))) throw new Error('no live write grant for this consumer + wallet')
       const input = inputFrom(args)
       if (!input) throw new Error('provide `credential`, `jwt`, or `manual` metadata')
+      const kek = await resolveKek(env)
+      if (!kek) throw new Error('record encryption unavailable (ROOTS_KEK not provisioned)')
+      const dataKeyB64 = await getWalletDataKey(env.DB, kek, walletId)
       const sourceType = args.source_type === 'issued' ? 'issued' : 'imported'
-      const { id, report } = await writeCredentialRecord(db, { walletId, input, sourceType, actor: key.tenantId })
+      const { id, report } = await writeCredentialRecord(env.DB, { walletId, input, sourceType, actor: key.tenantId, dataKeyB64 })
       return { ok: true, id, tier: report.tier, issuer: report.issuer ?? null, alignments: report.alignments ?? [] }
     },
   },
@@ -154,8 +165,8 @@ const TOOLS: Tool[] = [
     scope: 'registry:read',
     description: 'List the trust registry — issuers roots knows, with their status (trusted / known / revoked). A credential can only reach the "verified" tier if its issuer is trusted here.',
     inputSchema: { type: 'object', properties: {} },
-    run: async (db) => {
-      const { results } = await db.prepare(
+    run: async (env) => {
+      const { results } = await env.DB.prepare(
         `SELECT did_or_iss, name, method, status FROM issuers ORDER BY status, name`,
       ).all()
       return { issuers: results }
@@ -214,7 +225,7 @@ mcp.post('/', async (c) => {
         return c.json(rpcResult(id, toText({ error: `this API key lacks the required scope: ${tool.scope}` }, true)))
       }
       try {
-        const out = await tool.run(c.env.DB, key, args)
+        const out = await tool.run(c.env, key, args)
         return c.json(rpcResult(id, toText(out)))
       } catch (e) {
         return c.json(rpcResult(id, toText({ error: e instanceof Error ? e.message : 'tool error' }, true)))

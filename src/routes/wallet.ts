@@ -16,6 +16,7 @@ import type { Env } from '../auth'
 import { consumerAuth, delegatedHolderAuth, requireScope } from '../auth'
 import { activeReadGrant, logAccess } from '../grants'
 import { dbFirst, dbRun } from '../db'
+import { decryptRecords } from '../wallet-crypto'
 
 const wallet = new Hono<Env>()
 
@@ -43,12 +44,15 @@ wallet.get('/:id/records', consumerAuth, requireScope('credentials:read'), async
        FROM records
       WHERE wallet_id = ? AND data_type = ? AND state = 'active'
       ORDER BY created_at DESC`,
-  ).bind(walletId, dataType).all()
+  ).bind(walletId, dataType).all<Record<string, unknown>>()
 
+  // Decrypt at-rest payloads for this authorized (granted) consumer.
+  const records = await decryptRecords(c.env, walletId, results)
+  if (records === null) {
+    return c.json({ error: 'record decryption unavailable (ROOTS_KEK not provisioned)' }, 503)
+  }
   await logAccess(c.env.DB, { walletId, reader, dataType, purpose, outcome: 'allowed' })
-  // NOTE: encrypted payloads are returned as their {v,iv,ciphertext} envelope —
-  // consumer-side decrypt (a separate decrypt grant + KEK unwrap) is future work.
-  return c.json({ wallet_id: walletId, data_type: dataType, purpose, records: results })
+  return c.json({ wallet_id: walletId, data_type: dataType, purpose, records })
 })
 
 // ---------------------------------------------------------------- owner: grant

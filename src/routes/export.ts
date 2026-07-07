@@ -19,6 +19,7 @@ import { dbFirst } from '../db'
 import { getOrCreateIssuerKey } from '../credentials/keystore'
 import { createDataIntegrityProof } from '../credentials/di'
 import { issuerVerificationMethod } from '../credentials/keys'
+import { decryptRecords } from '../wallet-crypto'
 
 const exportRoutes = new Hono<Env>()
 
@@ -41,15 +42,19 @@ exportRoutes.get('/:id/export', delegatedHolderAuth, async (c) => {
       `SELECT id, data_type, payload, encrypted, source_type, source_ref, issuer_id, signature,
               alignment_json, state, created_at, updated_at
          FROM records WHERE wallet_id = ? ORDER BY created_at`,
-    ).bind(walletId).all(),
+    ).bind(walletId).all<Record<string, unknown>>(),
     c.env.DB.prepare(
       `SELECT e.id, e.record_id, e.event, e.reason, e.actor, e.created_at
          FROM record_events e JOIN records r ON r.id = e.record_id
         WHERE r.wallet_id = ? ORDER BY e.created_at`,
     ).bind(walletId).all(),
-    c.env.DB.prepare('SELECT id, reader, data_type, purpose, granted_at, revoked_at, granted_by FROM grants WHERE wallet_id = ? ORDER BY granted_at').bind(walletId).all(),
+    c.env.DB.prepare('SELECT id, grantee, capability, data_type, purpose, granted_at, revoked_at, granted_by FROM grants WHERE wallet_id = ? ORDER BY granted_at').bind(walletId).all(),
     c.env.DB.prepare('SELECT reader, data_type, purpose, outcome, at FROM access_log WHERE wallet_id = ? ORDER BY at').bind(walletId).all(),
   ])
+
+  // Decrypt at-rest payloads — the holder leaves with plaintext (bundle is signed).
+  const decryptedRecords = await decryptRecords(c.env, walletId, records.results)
+  if (decryptedRecords === null) return c.json({ error: 'export decryption unavailable (ROOTS_KEK not provisioned)' }, 503)
 
   const key = await getOrCreateIssuerKey(c.env.DB, kek, ROOTS_SIGNER)
   const unsecured: Record<string, unknown> = {
@@ -60,7 +65,7 @@ exportRoutes.get('/:id/export', delegatedHolderAuth, async (c) => {
     issuer: { did: key.did, publicKeyMultibase: key.publicKeyMultibase },
     wallet,
     identities: identities.results,
-    records: records.results,
+    records: decryptedRecords,
     record_events: events.results,
     grants: grants.results,
     access_log: access.results,
