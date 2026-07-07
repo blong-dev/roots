@@ -10,6 +10,7 @@
  */
 import { Hono } from 'hono'
 import type { D1Database } from '@cloudflare/workers-types'
+import wallet from './routes/wallet'
 
 export interface Bindings {
   DB: D1Database
@@ -21,9 +22,12 @@ const app = new Hono<{ Bindings: Bindings }>()
 
 app.get('/health', (c) => c.json({ status: 'ok', service: 'roots' }))
 
-// TODO (roots P1) — mount the lifted surface:
+// The consent surface: consumer read (grant-gated + logged) + owner grant/audit.
+app.route('/w', wallet)
+
+// TODO (roots P1) — remaining lifted surface:
 //   app.route('/w', wallets)              // POST /w (create + bind IdP), GET /w/:id/did.json(l)
-//   app.route('/w', records)              // typed records: write, consent-gated read, retract/reinstate/history
+//   app.route('/w', records)              // typed record WRITES + retract/reinstate/history
 //   app.route('/credentials', credentials)// POST /w/:id/credentials (issuer write), GET /:id/verify
 //   app.route('/issuers', issuers)        // trust registry
 //   app.route('/w', exportRoutes)         // GET /w/:id/export (sovereignty)
