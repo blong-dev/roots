@@ -48,7 +48,7 @@ exportRoutes.get('/:id/export', delegatedHolderAuth, async (c) => {
          FROM record_events e JOIN records r ON r.id = e.record_id
         WHERE r.wallet_id = ? ORDER BY e.created_at`,
     ).bind(walletId).all(),
-    c.env.DB.prepare('SELECT id, grantee, capability, data_type, purpose, granted_at, revoked_at, granted_by FROM grants WHERE wallet_id = ? ORDER BY granted_at').bind(walletId).all(),
+    c.env.DB.prepare('SELECT id, grantee, capability, scope, data_type, purpose, granted_at, revoked_at, granted_by FROM grants WHERE wallet_id = ? ORDER BY granted_at').bind(walletId).all(),
     c.env.DB.prepare('SELECT reader, data_type, purpose, outcome, at FROM access_log WHERE wallet_id = ? ORDER BY at').bind(walletId).all(),
   ])
 

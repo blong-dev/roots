@@ -15,6 +15,7 @@ export interface Grant {
   wallet_id: string
   grantee: string
   capability: 'read' | 'write'
+  scope: 'own' | 'all'
   data_type: string | null
   purpose: string | null
   granted_at: string
@@ -23,18 +24,21 @@ export interface Grant {
 }
 
 // guid:roots-grants-activeRead
-/** The live READ grant covering this exact read, or null. Prefers a type-specific
- *  grant over an all-types (data_type IS NULL) one. Revoked grants never match. */
+/** The live READ grant covering this read, or null. A NULL-purpose grant is
+ *  purpose-agnostic (used by 'own' grants — reading your own contributions isn't
+ *  purpose-gated); an 'all' grant carries a specific purpose. Prefers a
+ *  type-specific + purpose-specific grant. Revoked grants never match. */
 export async function activeReadGrant(
   db: D1Database, walletId: string, grantee: string, dataType: string, purpose: string,
 ): Promise<Grant | null> {
   return await dbFirst<Grant>(
     db,
     `SELECT * FROM grants
-      WHERE wallet_id = ? AND grantee = ? AND capability = 'read' AND purpose = ?
+      WHERE wallet_id = ? AND grantee = ? AND capability = 'read'
+        AND (purpose = ? OR purpose IS NULL)
         AND (data_type = ? OR data_type IS NULL)
         AND revoked_at IS NULL
-      ORDER BY (data_type IS NULL)   -- 0 (specific) sorts before 1 (all-types)
+      ORDER BY (purpose IS NULL), (data_type IS NULL)   -- most specific first
       LIMIT 1`,
     walletId, grantee, purpose, dataType,
   )

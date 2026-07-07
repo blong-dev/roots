@@ -56,8 +56,8 @@ export async function writeSelfRecord(
   const payloadStr = typeof p.payload === 'string' ? p.payload : JSON.stringify(p.payload)
   const stored = p.encrypt ? await sealPayload(p.dataKeyB64!, payloadStr) : payloadStr
   await db.batch([
-    db.prepare(`INSERT INTO records (id, wallet_id, data_type, payload, encrypted, source_type, source_ref) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .bind(id, p.walletId, p.dataType, stored, p.encrypt ? 1 : 0, p.sourceType, p.sourceRef ?? null),
+    db.prepare(`INSERT INTO records (id, wallet_id, data_type, payload, encrypted, source_type, source_ref, contributor) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(id, p.walletId, p.dataType, stored, p.encrypt ? 1 : 0, p.sourceType, p.sourceRef ?? null, p.actor),
     db.prepare(`INSERT INTO record_events (id, record_id, event, actor) VALUES (?, ?, 'created', ?)`)
       .bind(crypto.randomUUID(), id, p.actor),
   ])
@@ -80,9 +80,9 @@ export async function writeCredentialRecord(
   const id = crypto.randomUUID()
   await db.batch([
     db.prepare(
-      `INSERT INTO records (id, wallet_id, data_type, payload, encrypted, source_type, issuer_id, alignment_json)
-       VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
-    ).bind(id, p.walletId, p.dataType, sealed, p.sourceType, issuerId, alignmentJson),
+      `INSERT INTO records (id, wallet_id, data_type, payload, encrypted, source_type, issuer_id, alignment_json, contributor)
+       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+    ).bind(id, p.walletId, p.dataType, sealed, p.sourceType, issuerId, alignmentJson, p.actor),
     db.prepare(`INSERT INTO record_events (id, record_id, event, actor) VALUES (?, ?, ?, ?)`)
       .bind(crypto.randomUUID(), id, p.sourceType === 'issued' ? 'issued' : 'imported', p.actor),
   ])

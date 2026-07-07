@@ -93,10 +93,13 @@ const TOOLS: Tool[] = [
         await logAccess(env.DB, { walletId, reader, dataType, purpose, outcome: 'denied' })
         return { error: 'no live grant for this wallet + data_type + purpose', records: [] }
       }
-      const { results } = await env.DB.prepare(
+      const ownFilter = grant.scope === 'own' ? 'AND contributor = ?' : ''
+      const stmt = env.DB.prepare(
         `SELECT id, data_type, payload, encrypted, source_type, issuer_id, alignment_json, created_at, updated_at
-           FROM records WHERE wallet_id = ? AND data_type = ? AND state = 'active' ORDER BY created_at DESC`,
-      ).bind(walletId, dataType).all<Record<string, unknown>>()
+           FROM records WHERE wallet_id = ? AND data_type = ? AND state = 'active' ${ownFilter} ORDER BY created_at DESC`,
+      )
+      const { results } = await (grant.scope === 'own' ? stmt.bind(walletId, dataType, reader) : stmt.bind(walletId, dataType))
+        .all<Record<string, unknown>>()
       const records = await decryptRecords(env, walletId, results)
       if (records === null) return { error: 'record decryption unavailable (ROOTS_KEK not provisioned)', records: [] }
       await logAccess(env.DB, { walletId, reader, dataType, purpose, outcome: 'allowed' })

@@ -94,14 +94,21 @@ identity.post('/wallets', consumerAuth, requireScope('wallets:create'), async (c
 
   // Won the binding — mint the wallet's key (server-custodied; handoff moves it later).
   await getOrCreateReceiverKey(c.env.DB, kek, id)
-  // Silent-wallet bootstrap: the creating consumer may contribute to the wallet
-  // it just created (write grant, all types). The holder can revoke it later.
-  await dbRun(
-    c.env.DB,
-    `INSERT INTO grants (id, wallet_id, grantee, capability, data_type, purpose, granted_by)
-     VALUES (?, ?, ?, 'write', NULL, NULL, 'system:creation')`,
-    crypto.randomUUID(), id, c.get('reader') ?? 'consumer',
-  )
+  // Silent-wallet bootstrap: the creating consumer may CONTRIBUTE to the wallet
+  // it created (write grant, all types) and READ BACK its own contributions
+  // ('own'-scoped read grant, purpose-agnostic). It cannot read another
+  // contributor's data without an explicit grant from the holder. Both revocable.
+  const consumer = c.get('reader') ?? 'consumer'
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `INSERT INTO grants (id, wallet_id, grantee, capability, scope, data_type, purpose, granted_by)
+       VALUES (?, ?, ?, 'write', 'all', NULL, NULL, 'system:creation')`,
+    ).bind(crypto.randomUUID(), id, consumer),
+    c.env.DB.prepare(
+      `INSERT INTO grants (id, wallet_id, grantee, capability, scope, data_type, purpose, granted_by)
+       VALUES (?, ?, ?, 'read', 'own', NULL, NULL, 'system:creation')`,
+    ).bind(crypto.randomUUID(), id, consumer),
+  ])
   return c.json({ ok: true, existing: false, wallet_id: id, did })
 })
 
