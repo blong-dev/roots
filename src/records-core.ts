@@ -68,7 +68,7 @@ export async function writeSelfRecord(
 /** Credentials are always encrypted at rest (owner-sovereignty default). */
 export async function writeCredentialRecord(
   db: D1Database,
-  p: { walletId: string; dataType: string; input: ExternalInput; sourceType: 'issued' | 'imported'; actor: string; dataKeyB64: string },
+  p: { walletId: string; dataType: string; input: ExternalInput; sourceType: 'issued' | 'imported'; actor: string; dataKeyB64: string; sourceRef?: string | null },
 ): Promise<{ id: string; report: ExternalReport }> {
   const report = await verifyExternal(p.input, db)
   const issuerId = report.issuer?.id ? await upsertIssuer(db, report.issuer.id, report.issuer.name ?? null) : null
@@ -80,9 +80,9 @@ export async function writeCredentialRecord(
   const id = crypto.randomUUID()
   await db.batch([
     db.prepare(
-      `INSERT INTO records (id, wallet_id, data_type, payload, encrypted, source_type, issuer_id, alignment_json, contributor)
-       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)`,
-    ).bind(id, p.walletId, p.dataType, sealed, p.sourceType, issuerId, alignmentJson, p.actor),
+      `INSERT INTO records (id, wallet_id, data_type, payload, encrypted, source_type, source_ref, issuer_id, alignment_json, contributor)
+       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+    ).bind(id, p.walletId, p.dataType, sealed, p.sourceType, p.sourceRef ?? null, issuerId, alignmentJson, p.actor),
     db.prepare(`INSERT INTO record_events (id, record_id, event, actor) VALUES (?, ?, ?, ?)`)
       .bind(crypto.randomUUID(), id, p.sourceType === 'issued' ? 'issued' : 'imported', p.actor),
   ])

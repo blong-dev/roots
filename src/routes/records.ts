@@ -72,7 +72,7 @@ records.post('/:id/records', consumerAuth, requireScope('credentials:import'), a
 records.post('/:id/credentials', consumerAuth, requireScope('credentials:import'), async (c) => {
   const walletId = c.req.param('id')!
   if (!(await walletExists(c.env.DB, walletId))) return c.json({ error: 'wallet not found' }, 404)
-  const body = await c.req.json<{ kind?: string; doc?: unknown; token?: string; meta?: unknown; source_type?: string; data_type?: string }>().catch(() => null)
+  const body = await c.req.json<{ kind?: string; doc?: unknown; token?: string; meta?: unknown; source_type?: string; data_type?: string; source_ref?: string }>().catch(() => null)
   const input = body && toExternalInput(body)
   if (!input) return c.json({ error: 'provide a credential ({doc}/{token}/{manual meta})' }, 400)
   const dataType = body?.data_type?.trim() || 'dt.attestation@1'
@@ -89,7 +89,7 @@ records.post('/:id/credentials', consumerAuth, requireScope('credentials:import'
   const dataKeyB64 = await getWalletDataKey(c.env.DB, kek, walletId)
   const sourceType = body?.source_type === 'issued' ? 'issued' : 'imported'
   const { id, report } = await writeCredentialRecord(c.env.DB, {
-    walletId, dataType, input, sourceType, actor: consumer, dataKeyB64,
+    walletId, dataType, input, sourceType, actor: consumer, dataKeyB64, sourceRef: body?.source_ref?.trim() || null,
   })
   // tier is a reading — returned for convenience, never stored.
   return c.json({ ok: true, id, tier: report.tier, issuer: report.issuer ?? null, alignments: report.alignments ?? [] })
