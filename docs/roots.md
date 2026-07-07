@@ -149,8 +149,10 @@ Grounded in `wallet-v0.md` §4–5; the credential routes already exist in Telek
   **BUILT** (`f6062b4`): the read route + grant gate. See the consent model below.
 - **Credentials:** `POST /w/:id/credentials` (an issuer writes a VC into the wallet) ·
   `GET /credentials/:id/verify` (the moved verifier) · import (moved).
-- **Export (sovereignty):** `GET /w/:id/export` — full decrypt + signed bundle; the user leaves with
-  everything intact.
+- **Export (sovereignty):** `GET /w/:id/export` — signed bundle of the ENTIRE wallet (records all
+  states + full audit chain + identities + grants + access log). **BUILT** (`c5128f3`): eddsa-jcs-2022
+  proof via the credential engine's own signing path, signer pubkey embedded → integrity-verifiable
+  OFFLINE. Hard rule #4. (Per-record decrypt on export is future; envelopes ship as-is today.)
 - **Issuers:** `GET/POST /issuers` (registry, moved).
 - **Auth:** scoped API keys + operator token + MCP (moved); plus per-wallet *holder* auth (the human
   reads/exports their own wallet).
