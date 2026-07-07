@@ -5,3 +5,4 @@ dist/
 .env
 *.log
 .roots-ops-token
+.telekora-roots-key
