@@ -29,14 +29,19 @@ the rest are CLI.
    chars) and `ROOTS_DELEGATION_ISSUERS` (Telekora's issuer DID; unset =
    deny-all delegation, fail-closed).
 5. **Apply migrations** to the remote DB (0001–0008), in order.
-6. **mTLS second factor [dashboard]:** configure Cloudflare **API Shield mTLS** on
-   `id.dreamtree.org` — upload the client-cert CA (or Telekora's cert), enforce
-   client certs. Then `wrangler secret put ROOTS_REQUIRE_MTLS` (any non-empty) and,
-   optionally, `ROOTS_MTLS_FINGERPRINTS` to pin specific consumers. This makes a
-   leaked API key useless on its own. Public routes (DID docs, health, data-types)
-   stay open; only authenticated routes require the cert.
-7. **Rate limiting [dashboard]:** add Cloudflare WAF / rate-limit rules —
-   especially credential-verify + import (outbound `safeFetch`) and `POST /wallets`.
+6. **Consumer-path hardening — DECIDED 2026-07-07: WAF rate-limiting + scoped API
+   key, NOT mTLS.** A Worker presenting a client cert to a Cloudflare-proxied zone
+   gets a **520**, so Telekora (a CF Worker) can never satisfy API Shield mTLS on
+   `id.dreamtree.org`. **Never set `ROOTS_REQUIRE_MTLS` while Telekora is the
+   consumer** — it would reject Telekora, not protect it. The `requireMtls` code
+   stays for a future non-Cloudflare external consumer only.
+7. **Rate limiting [dashboard]:** add a WAF rate-limit rule on the dreamtree.org
+   zone covering `/wallets`, `*/credentials*`, `*/records*`, `/mcp`, `/admin`
+   (see DT-9 for the exact expression). Public reads (health, data-types, DID
+   docs) stay unthrottled. Note: Telekora's calls arrive from shared Worker
+   egress IPs, so keep the per-IP threshold generous (~60/10s) until traffic is
+   real; revisit with header-based counting (paid tier) or app-level limits at
+   scale.
 8. **Deploy:** `wrangler deploy`. Smoke-test `GET /health`, a DID doc, `/data-types`.
 
 ## Audit outcome (fixed before deploy)
