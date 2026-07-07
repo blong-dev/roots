@@ -16,6 +16,7 @@ import issuers from './routes/issuers'
 import exportRoutes from './routes/export'
 import mcp from './routes/mcp'
 import identity from './routes/identity'
+import { DATA_TYPES } from './data-types'
 
 export interface Bindings {
   DB: D1Database
@@ -27,6 +28,12 @@ export interface Bindings {
 const app = new Hono<{ Bindings: Bindings }>()
 
 app.get('/health', (c) => c.json({ status: 'ok', service: 'roots' }))
+
+// The data_type registry (public catalog): the authoritative set of writable
+// types, their PII-derived encryption, and record-vs-credential kind.
+app.get('/data-types', (c) => c.json({
+  data_types: Object.entries(DATA_TYPES).map(([key, e]) => ({ key, ...e })),
+}))
 
 // Identity: wallet creation (silent wallet on signup) + DID doc / history serving.
 app.route('/', identity)

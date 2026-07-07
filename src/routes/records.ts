@@ -23,6 +23,7 @@ import { verifyExternal, type ExternalInput } from '../credentials/verify-extern
 import { walletExists, toExternalInput, writeSelfRecord, writeCredentialRecord } from '../records-core'
 import { activeWriteGrant } from '../grants'
 import { resolveKek, getWalletDataKey, openPayload } from '../wallet-crypto'
+import { lookupDataType } from '../data-types'
 
 const records = new Hono<Env>()
 
@@ -41,19 +42,29 @@ records.post('/:id/records', consumerAuth, requireScope('credentials:import'), a
   const b = await c.req.json<{ data_type?: string; payload?: unknown; source_type?: string; source_ref?: string }>().catch(() => null)
   const dataType = b?.data_type?.trim()
   if (!dataType) return c.json({ error: 'data_type required' }, 400)
+  // Fail-closed: the registry is authoritative. Records go to POST /records; VCs
+  // to POST /credentials.
+  const entry = lookupDataType(dataType)
+  if (!entry || entry.kind !== 'record') {
+    return c.json({ error: `unknown or non-record data_type '${dataType}' (see GET /data-types)` }, 400)
+  }
   if (b?.payload === undefined || b?.payload === null) return c.json({ error: 'payload required' }, 400)
   const consumer = c.get('reader') ?? 'consumer'
   if (!(await activeWriteGrant(c.env.DB, walletId, consumer, dataType))) {
     return c.json({ error: 'no live write grant for this consumer + wallet + data_type' }, 403)
   }
-  const kek = await resolveKek(c.env)
-  if (!kek) return c.json({ error: 'record encryption unavailable (ROOTS_KEK not provisioned)' }, 503)
-  const dataKeyB64 = await getWalletDataKey(c.env.DB, kek, walletId)
+  // Encrypt at rest only when the type is PII (registry-derived).
+  let dataKeyB64: string | undefined
+  if (entry.encrypted) {
+    const kek = await resolveKek(c.env)
+    if (!kek) return c.json({ error: 'record encryption unavailable (ROOTS_KEK not provisioned)' }, 503)
+    dataKeyB64 = await getWalletDataKey(c.env.DB, kek, walletId)
+  }
   const sourceType = b.source_type === 'tool' ? 'tool' : 'self'
   const { id } = await writeSelfRecord(c.env.DB, {
-    walletId, dataType, payload: b.payload, sourceType, sourceRef: b.source_ref ?? null, actor: consumer, dataKeyB64,
+    walletId, dataType, payload: b.payload, sourceType, sourceRef: b.source_ref ?? null, actor: consumer, encrypt: entry.encrypted, dataKeyB64,
   })
-  return c.json({ ok: true, id, data_type: dataType, source_type: sourceType })
+  return c.json({ ok: true, id, data_type: dataType, source_type: sourceType, encrypted: entry.encrypted })
 })
 
 // ---------------------------------------------------------------- credential write
@@ -61,11 +72,16 @@ records.post('/:id/records', consumerAuth, requireScope('credentials:import'), a
 records.post('/:id/credentials', consumerAuth, requireScope('credentials:import'), async (c) => {
   const walletId = c.req.param('id')!
   if (!(await walletExists(c.env.DB, walletId))) return c.json({ error: 'wallet not found' }, 404)
-  const body = await c.req.json<{ kind?: string; doc?: unknown; token?: string; meta?: unknown; source_type?: string }>().catch(() => null)
+  const body = await c.req.json<{ kind?: string; doc?: unknown; token?: string; meta?: unknown; source_type?: string; data_type?: string }>().catch(() => null)
   const input = body && toExternalInput(body)
   if (!input) return c.json({ error: 'provide a credential ({doc}/{token}/{manual meta})' }, 400)
+  const dataType = body?.data_type?.trim() || 'dt.attestation@1'
+  const entry = lookupDataType(dataType)
+  if (!entry || entry.kind !== 'credential') {
+    return c.json({ error: `unknown or non-credential data_type '${dataType}' (see GET /data-types)` }, 400)
+  }
   const consumer = c.get('reader') ?? 'issuer'
-  if (!(await activeWriteGrant(c.env.DB, walletId, consumer, 'credential'))) {
+  if (!(await activeWriteGrant(c.env.DB, walletId, consumer, dataType))) {
     return c.json({ error: 'no live write grant for this consumer + wallet' }, 403)
   }
   const kek = await resolveKek(c.env)
@@ -73,7 +89,7 @@ records.post('/:id/credentials', consumerAuth, requireScope('credentials:import'
   const dataKeyB64 = await getWalletDataKey(c.env.DB, kek, walletId)
   const sourceType = body?.source_type === 'issued' ? 'issued' : 'imported'
   const { id, report } = await writeCredentialRecord(c.env.DB, {
-    walletId, input, sourceType, actor: consumer, dataKeyB64,
+    walletId, dataType, input, sourceType, actor: consumer, dataKeyB64,
   })
   // tier is a reading — returned for convenience, never stored.
   return c.json({ ok: true, id, tier: report.tier, issuer: report.issuer ?? null, alignments: report.alignments ?? [] })

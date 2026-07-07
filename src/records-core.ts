@@ -46,16 +46,18 @@ export async function upsertIssuer(db: D1Database, didOrIss: string, name: strin
 }
 
 // guid:records-core-writeSelfRecord
+/** Seal the payload only when the type is PII (`encrypt`); non-PII types are
+ *  stored clear at rest, per the registry's PII class. */
 export async function writeSelfRecord(
   db: D1Database,
-  p: { walletId: string; dataType: string; payload: unknown; sourceType: 'self' | 'tool'; sourceRef?: string | null; actor: string; dataKeyB64: string },
+  p: { walletId: string; dataType: string; payload: unknown; sourceType: 'self' | 'tool'; sourceRef?: string | null; actor: string; encrypt: boolean; dataKeyB64?: string },
 ): Promise<{ id: string }> {
   const id = crypto.randomUUID()
   const payloadStr = typeof p.payload === 'string' ? p.payload : JSON.stringify(p.payload)
-  const sealed = await sealPayload(p.dataKeyB64, payloadStr)
+  const stored = p.encrypt ? await sealPayload(p.dataKeyB64!, payloadStr) : payloadStr
   await db.batch([
-    db.prepare(`INSERT INTO records (id, wallet_id, data_type, payload, encrypted, source_type, source_ref) VALUES (?, ?, ?, ?, 1, ?, ?)`)
-      .bind(id, p.walletId, p.dataType, sealed, p.sourceType, p.sourceRef ?? null),
+    db.prepare(`INSERT INTO records (id, wallet_id, data_type, payload, encrypted, source_type, source_ref) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .bind(id, p.walletId, p.dataType, stored, p.encrypt ? 1 : 0, p.sourceType, p.sourceRef ?? null),
     db.prepare(`INSERT INTO record_events (id, record_id, event, actor) VALUES (?, ?, 'created', ?)`)
       .bind(crypto.randomUUID(), id, p.actor),
   ])
@@ -63,9 +65,10 @@ export async function writeSelfRecord(
 }
 
 // guid:records-core-writeCredentialRecord
+/** Credentials are always encrypted at rest (owner-sovereignty default). */
 export async function writeCredentialRecord(
   db: D1Database,
-  p: { walletId: string; input: ExternalInput; sourceType: 'issued' | 'imported'; actor: string; dataKeyB64: string },
+  p: { walletId: string; dataType: string; input: ExternalInput; sourceType: 'issued' | 'imported'; actor: string; dataKeyB64: string },
 ): Promise<{ id: string; report: ExternalReport }> {
   const report = await verifyExternal(p.input, db)
   const issuerId = report.issuer?.id ? await upsertIssuer(db, report.issuer.id, report.issuer.name ?? null) : null
@@ -78,8 +81,8 @@ export async function writeCredentialRecord(
   await db.batch([
     db.prepare(
       `INSERT INTO records (id, wallet_id, data_type, payload, encrypted, source_type, issuer_id, alignment_json)
-       VALUES (?, ?, 'credential', ?, 1, ?, ?, ?)`,
-    ).bind(id, p.walletId, sealed, p.sourceType, issuerId, alignmentJson),
+       VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
+    ).bind(id, p.walletId, p.dataType, sealed, p.sourceType, issuerId, alignmentJson),
     db.prepare(`INSERT INTO record_events (id, record_id, event, actor) VALUES (?, ?, ?, ?)`)
       .bind(crypto.randomUUID(), id, p.sourceType === 'issued' ? 'issued' : 'imported', p.actor),
   ])

@@ -21,6 +21,7 @@ import { verifyExternal, type ExternalInput } from '../credentials/verify-extern
 import { activeReadGrant, activeWriteGrant, logAccess } from '../grants'
 import { writeSelfRecord, writeCredentialRecord, walletExists } from '../records-core'
 import { resolveKek, getWalletDataKey, decryptRecords } from '../wallet-crypto'
+import { lookupDataType } from '../data-types'
 
 type Bindings = Env['Bindings']
 
@@ -119,15 +120,20 @@ const TOOLS: Tool[] = [
     run: async (env, key, args) => {
       const walletId = str(args.wallet_id), dataType = str(args.data_type)
       if (!walletId || !dataType) throw new Error('wallet_id and data_type are required')
+      const entry = lookupDataType(dataType)
+      if (!entry || entry.kind !== 'record') throw new Error(`unknown or non-record data_type '${dataType}' (see the data-types catalog)`)
       if (args.payload === undefined || args.payload === null) throw new Error('payload is required')
       if (!(await walletExists(env.DB, walletId))) throw new Error('wallet not found')
       if (!(await activeWriteGrant(env.DB, walletId, key.tenantId, dataType))) throw new Error('no live write grant for this consumer + wallet + data_type')
-      const kek = await resolveKek(env)
-      if (!kek) throw new Error('record encryption unavailable (ROOTS_KEK not provisioned)')
-      const dataKeyB64 = await getWalletDataKey(env.DB, kek, walletId)
+      let dataKeyB64: string | undefined
+      if (entry.encrypted) {
+        const kek = await resolveKek(env)
+        if (!kek) throw new Error('record encryption unavailable (ROOTS_KEK not provisioned)')
+        dataKeyB64 = await getWalletDataKey(env.DB, kek, walletId)
+      }
       const sourceType = args.source_type === 'tool' ? 'tool' : 'self'
-      const { id } = await writeSelfRecord(env.DB, { walletId, dataType, payload: args.payload, sourceType, actor: key.tenantId, dataKeyB64 })
-      return { ok: true, id, data_type: dataType, source_type: sourceType }
+      const { id } = await writeSelfRecord(env.DB, { walletId, dataType, payload: args.payload, sourceType, actor: key.tenantId, encrypt: entry.encrypted, dataKeyB64 })
+      return { ok: true, id, data_type: dataType, source_type: sourceType, encrypted: entry.encrypted }
     },
   },
   {
@@ -142,21 +148,25 @@ const TOOLS: Tool[] = [
         credential: { description: 'The credential as JSON (object or string).' },
         jwt: { type: 'string', description: 'Alternatively, a compact JWS credential.' },
         manual: { type: 'object', description: 'Alternatively, manual metadata {issuerName, credentialName, issuedAt, expiresAt}.' },
+        data_type: { type: 'string', description: "a dt.credential.* / dt.attestation / dt.outcome.* / dt.identity.* key; defaults to 'dt.attestation@1'" },
         source_type: { type: 'string', enum: ['issued', 'imported'], description: "defaults to 'imported'" },
       },
     },
     run: async (env, key, args) => {
       const walletId = str(args.wallet_id)
       if (!walletId) throw new Error('wallet_id is required')
+      const dataType = str(args.data_type) ?? 'dt.attestation@1'
+      const entry = lookupDataType(dataType)
+      if (!entry || entry.kind !== 'credential') throw new Error(`unknown or non-credential data_type '${dataType}' (see the data-types catalog)`)
       if (!(await walletExists(env.DB, walletId))) throw new Error('wallet not found')
-      if (!(await activeWriteGrant(env.DB, walletId, key.tenantId, 'credential'))) throw new Error('no live write grant for this consumer + wallet')
+      if (!(await activeWriteGrant(env.DB, walletId, key.tenantId, dataType))) throw new Error('no live write grant for this consumer + wallet')
       const input = inputFrom(args)
       if (!input) throw new Error('provide `credential`, `jwt`, or `manual` metadata')
       const kek = await resolveKek(env)
       if (!kek) throw new Error('record encryption unavailable (ROOTS_KEK not provisioned)')
       const dataKeyB64 = await getWalletDataKey(env.DB, kek, walletId)
       const sourceType = args.source_type === 'issued' ? 'issued' : 'imported'
-      const { id, report } = await writeCredentialRecord(env.DB, { walletId, input, sourceType, actor: key.tenantId, dataKeyB64 })
+      const { id, report } = await writeCredentialRecord(env.DB, { walletId, dataType, input, sourceType, actor: key.tenantId, dataKeyB64 })
       return { ok: true, id, tier: report.tier, issuer: report.issuer ?? null, alignments: report.alignments ?? [] }
     },
   },
