@@ -42,7 +42,7 @@ wallet.get('/:id/records', consumerAuth, requireScope('credentials:read'), async
   // An 'own'-scoped grant reads only what this grantee contributed.
   const ownFilter = grant.scope === 'own' ? 'AND contributor = ?' : ''
   const stmt = c.env.DB.prepare(
-    `SELECT id, data_type, payload, encrypted, source_type, issuer_id, alignment_json, created_at, updated_at
+    `SELECT id, data_type, payload, encrypted, source_type, source_ref, issuer_id, alignment_json, created_at, updated_at
        FROM records
       WHERE wallet_id = ? AND data_type = ? AND state = 'active' ${ownFilter}
       ORDER BY created_at DESC`,
