@@ -17,6 +17,7 @@ import exportRoutes from './routes/export'
 import mcp from './routes/mcp'
 import identity from './routes/identity'
 import admin from './routes/admin'
+import { LANDING_HTML } from './landing'
 import { DATA_TYPES } from './data-types'
 
 export interface Bindings {
@@ -32,6 +33,9 @@ export interface Bindings {
 const app = new Hono<{ Bindings: Bindings }>()
 
 app.get('/health', (c) => c.json({ status: 'ok', service: 'roots' }))
+
+// The human face of the DID anchor domain.
+app.get('/', (c) => c.html(LANDING_HTML))
 
 // The data_type registry (public catalog): the authoritative set of writable
 // types, their PII-derived encryption, and record-vs-credential kind.
