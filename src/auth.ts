@@ -34,8 +34,31 @@ function ctEq(a: string, b: string): boolean {
   return d === 0
 }
 
+// guid:roots-auth-mtls
+// The mTLS second factor. When ROOTS_REQUIRE_MTLS is set, every authenticated
+// entry point additionally requires a valid client certificate (validated by
+// Cloudflare API Shield at the edge, surfaced as request.cf.tlsClientAuth). A
+// leaked API key or delegation is useless without the cert — two independent
+// cryptographic factors, no account coupling. Public routes (DID docs, health,
+// data-types) do NOT call this. Returns a 401 Response to short-circuit, or null.
+export function requireMtls(c: Context<Env>): Response | null {
+  if (!c.env.ROOTS_REQUIRE_MTLS) return null
+  const auth = (c.req.raw as unknown as {
+    cf?: { tlsClientAuth?: { certVerified?: string; certFingerprintSHA256?: string } }
+  }).cf?.tlsClientAuth
+  if (!auth || auth.certVerified !== 'SUCCESS') {
+    return c.json({ error: 'client certificate required (mTLS)' }, 401)
+  }
+  const allow = (c.env.ROOTS_MTLS_FINGERPRINTS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+  if (allow.length && !allow.includes(String(auth.certFingerprintSHA256 ?? '').toLowerCase())) {
+    return c.json({ error: 'client certificate not recognized' }, 401)
+  }
+  return null
+}
+
 // guid:roots-auth-consumer
 export async function consumerAuth(c: Context<Env>, next: Next): Promise<Response | void> {
+  const mtls = requireMtls(c); if (mtls) return mtls
   const key = bearer(c)
   if (!key) return c.json({ error: 'api key required' }, 401)
   const resolved = await resolveApiKey(c.env.DB, key)
@@ -55,6 +78,7 @@ export function requireScope(scope: string) {
 
 // guid:roots-auth-operator
 export async function operatorAuth(c: Context<Env>, next: Next): Promise<Response | void> {
+  const mtls = requireMtls(c); if (mtls) return mtls
   const tok = c.env.ROOTS_OPS_TOKEN
   const got = bearer(c)
   if (!tok || tok.length < 24 || !got || !ctEq(got, tok)) {
@@ -130,6 +154,7 @@ async function verifyDelegation(c: Context<Env>, token: string): Promise<Delegat
 
 // guid:roots-auth-delegatedHolder
 export async function delegatedHolderAuth(c: Context<Env>, next: Next): Promise<Response | void> {
+  const mtls = requireMtls(c); if (mtls) return mtls
   const del = c.req.header('x-roots-delegation')
   if (del) {
     const d = await verifyDelegation(c, del.trim())

@@ -16,13 +16,17 @@ import issuers from './routes/issuers'
 import exportRoutes from './routes/export'
 import mcp from './routes/mcp'
 import identity from './routes/identity'
+import admin from './routes/admin'
 import { DATA_TYPES } from './data-types'
 
 export interface Bindings {
   DB: D1Database
   ROOTS_KEK?: { get(): Promise<string> } | string // Secrets Store (prod) or plain string (dev): KEK for privkeys + data keys
+  ROOTS_KEK_NEXT?: { get(): Promise<string> } | string // the incoming KEK during a rotation (see POST /admin/kek/rotate)
   ROOTS_OPS_TOKEN?: string // operator bearer — owner break-glass for holder routes
   ROOTS_DELEGATION_ISSUERS?: string // CSV of DIDs allowed to vouch for holders (e.g. did:web:telekora.com)
+  ROOTS_REQUIRE_MTLS?: string // when set (non-empty), authenticated routes require a valid client cert (Cloudflare API Shield)
+  ROOTS_MTLS_FINGERPRINTS?: string // optional CSV of allowed client-cert SHA-256 fingerprints (pin specific consumers)
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -48,5 +52,7 @@ app.route('/issuers', issuers)
 app.route('/w', exportRoutes)
 // Agent surface: JSON-RPC MCP over the same scoped API keys + consent gate.
 app.route('/mcp', mcp)
+// Operator-only key management (KEK rotation).
+app.route('/admin', admin)
 
 export default app
