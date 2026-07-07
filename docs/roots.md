@@ -167,8 +167,15 @@ kills consent fatigue (the only real argument for session) while keeping owner c
   **every request** — so a captured session can't grind the wallet: revocation lands on the *next*
   read, scope caps the blast radius, and every access (allowed **and denied**) is in `access_log`
   where the owner sees it.
-- Consumer auth = scoped API key (`reader` identity). Owner/consent routes are **operator-token-gated
-  for now** — interim holder auth until IdP→did:webvh holder sessions ship (`wallet-spec.md` L2 Q5).
+- Consumer auth = scoped API key (`reader` identity). Owner/consent routes use **delegated holder auth**
+  (`delegatedHolderAuth`): a trusted consumer (Telekora) authenticates the human, then signs a
+  short-lived `{iss, sub=holder, wallet, exp}` assertion. roots verifies it with the *same crypto the
+  credential verifier uses* (did:web/did:key + Ed25519) — no roots-side IdP, no new trust root. Only DIDs
+  in `ROOTS_DELEGATION_ISSUERS` may vouch (a scope distinct from the credential registry). The operator
+  token remains only as owner break-glass. The real holder now flows into the audit chain (`granted_by`,
+  `record_events.actor`). Forward-compatible: a future dreamtree.org login is just another session
+  source, and the custody handoff becomes a legible event (roots stops accepting Telekora's vouch for a
+  wallet, requires the holder's own did:webvh session).
 - Verified end-to-end (9/9): deny-before-grant, allow-with-grant (retracted excluded), purpose-match,
   revoke-lands-next-read, denied-probe logging.
 
@@ -210,8 +217,10 @@ The move that makes roots the moat rather than a feature trapped in one app:
   consumer.
 - **Open decisions** carried from `wallet-spec.md`: cross-IdP merging (L1 Q4), smart-content read
   surface / encryption boundary (L2 Q6/Q7), PDS sync, the public SDK shape (L6 Q20). *Read-consent
-  granularity (L6 Q21) is now settled — per-read, above.* Holder-session auth (replacing the interim
-  operator gate) and issuer-write consent UX (L6 Q22) remain.
+  granularity (L6 Q21) is settled — per-read, above.* *Holder auth is settled — delegated holder auth,
+  above; the did:webvh holder-key path arrives with the custody handoff, not as separate auth work.*
+  Issuer-write consent UX (L6 Q22) remains. The delegation model adds `jti`/replay hardening as a
+  future item (60s expiry bounds it for now).
 
 ---
 
