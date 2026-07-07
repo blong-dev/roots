@@ -37,6 +37,21 @@ app.get('/health', (c) => c.json({ status: 'ok', service: 'roots' }))
 // The human face of the DID anchor domain.
 app.get('/', (c) => c.html(LANDING_HTML))
 
+// Public network stats — the living proof for the marketing surfaces. Counts
+// only; nothing identifying. Edge-cached to keep reads free.
+app.get('/stats', async (c) => {
+  const row = await c.env.DB.prepare(
+    `SELECT (SELECT COUNT(*) FROM wallets) AS wallets,
+            (SELECT COUNT(*) FROM records) AS records,
+            (SELECT COUNT(*) FROM issuers) AS issuers`,
+  ).first<{ wallets: number; records: number; issuers: number }>()
+  return c.json(
+    { wallets: row?.wallets ?? 0, records: row?.records ?? 0, issuers: row?.issuers ?? 0 },
+    200,
+    { 'cache-control': 'public, max-age=300', 'access-control-allow-origin': '*' },
+  )
+})
+
 // The data_type registry (public catalog): the authoritative set of writable
 // types, their PII-derived encryption, and record-vs-credential kind.
 app.get('/data-types', (c) => c.json({
