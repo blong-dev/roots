@@ -82,7 +82,7 @@ wallet.get('/:id/records', consumerAuth, requireScope('credentials:read'), async
       if (!input) return { ...r, tier: 'self-reported' }
       const rep = await verifyExternal(input, c.env.DB)
       return {
-        ...r, tier: rep.tier, issuer_did_or_iss: rep.issuer?.id ?? null, issuer_name: rep.issuer?.name ?? null,
+        ...r, tier: rep.tier, format: rep.format, issuer_did_or_iss: rep.issuer?.id ?? null, issuer_name: rep.issuer?.name ?? null,
         credential_name: rep.credentialName ?? null, issued_at: rep.issuedAt ?? null, expires_at: rep.expiresAt ?? null,
       }
     }))
