@@ -1,6 +1,17 @@
 # DT-5 — wiring Telekora to roots (the staged extract)
 
-**Status: scope, 2026-07-06.** roots' P1 surface + P2 registry are built and audited.
+**Status: COMPLETE, 2026-07-07.** Every stage below is live in production and was
+verified end-to-end the day it shipped: Stage 0 (silent wallets on signup), Stage 1
+(shadow-write of responses + issued VCs), Stage 2 (backfill, idempotency proven),
+Stage 3 (roster read-through), Stage 4 (authority flip: imports roots-only,
+verify-at-read tiers, contributor lifecycle via /contributions), and Stage 4b
+(audit view, holdings, and the MCP wallet tools served from roots through the
+shared roots-views implementation). Local `wallet_records` is a cold backup frozen
+at flip; `learner_data` remains Telekora's operational LMS store by design. The
+remaining epic is DT-6 (custody handoff), parked until real users exist. The
+original scope follows as written, for the record.
+
+**Original scope (2026-07-06).** roots' P1 surface + P2 registry are built and audited.
 This scopes how Telekora stops being the de-facto wallet and becomes a *client +
 issuer* of roots — in reversible stages that never break the live telekora.com
 demo. The DTW handoff stub (`telekora/docs/specs/dtw-handoff.md`) is the
