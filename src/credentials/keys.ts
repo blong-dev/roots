@@ -73,7 +73,7 @@ export function verificationMethodFromDid(did: string): string {
 // Profile §3 (dreamtree/credential-profile.md): institutional issuers use
 // did:web — rotation via the served DID document. Tenant DIDs live under the
 // platform domain until a white-label tenant graduates to its own domain.
-export const DID_WEB_DOMAIN = 'telekora.com'
+export const DID_WEB_DOMAIN = 'dreamtree.org'
 
 // guid:keys-didWebForTenant
 // guid:63c8fed6-e9e1-4980-984d-66b73cd19373

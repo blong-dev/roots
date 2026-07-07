@@ -13,10 +13,11 @@ import type { D1Database } from '@cloudflare/workers-types'
 import wallet from './routes/wallet'
 import records from './routes/records'
 import issuers from './routes/issuers'
+import exportRoutes from './routes/export'
 
 export interface Bindings {
   DB: D1Database
-  ROOTS_KEK?: { get(): Promise<string> } // Secrets Store: KEK for issuer/receiver privkeys + per-wallet data keys
+  ROOTS_KEK?: { get(): Promise<string> } | string // Secrets Store (prod) or plain string (dev): KEK for privkeys + data keys
   ROOTS_OPS_TOKEN?: string // operator bearer — owner break-glass for holder routes
   ROOTS_DELEGATION_ISSUERS?: string // CSV of DIDs allowed to vouch for holders (e.g. did:web:telekora.com)
 }
@@ -31,10 +32,11 @@ app.route('/w', wallet)
 app.route('/w', records)
 // The trust registry.
 app.route('/issuers', issuers)
+// Sovereignty: the holder leaves with a signed bundle of everything.
+app.route('/w', exportRoutes)
 
 // TODO (roots P1) — remaining lifted surface:
 //   app.route('/w', wallets)              // POST /w (create + bind IdP), GET /w/:id/did.json(l)
-//   app.route('/w', exportRoutes)         // GET /w/:id/export (sovereignty)
 //   app.route('/mcp', mcp)                // agent surface (lifted)
 
 export default app
