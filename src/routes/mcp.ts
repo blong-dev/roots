@@ -18,7 +18,7 @@ import { Hono } from 'hono'
 import type { Env } from '../auth'
 import { resolveApiKey, type ResolvedApiKey } from '../apikeys'
 import { verifyExternal, type ExternalInput } from '../credentials/verify-external'
-import { activeGrant, logAccess } from '../grants'
+import { activeReadGrant, activeWriteGrant, logAccess } from '../grants'
 import { writeSelfRecord, writeCredentialRecord, walletExists } from '../records-core'
 
 const PROTOCOL_VERSION = '2025-06-18'
@@ -84,7 +84,7 @@ const TOOLS: Tool[] = [
       const walletId = str(args.wallet_id), dataType = str(args.data_type), purpose = str(args.purpose)
       if (!walletId || !dataType || !purpose) throw new Error('wallet_id, data_type and purpose are required — reads are scoped, not blanket')
       const reader = key.tenantId
-      const grant = await activeGrant(db, walletId, reader, dataType, purpose)
+      const grant = await activeReadGrant(db, walletId, reader, dataType, purpose)
       if (!grant) {
         await logAccess(db, { walletId, reader, dataType, purpose, outcome: 'denied' })
         return { error: 'no live grant for this wallet + data_type + purpose', records: [] }
@@ -116,6 +116,7 @@ const TOOLS: Tool[] = [
       if (!walletId || !dataType) throw new Error('wallet_id and data_type are required')
       if (args.payload === undefined || args.payload === null) throw new Error('payload is required')
       if (!(await walletExists(db, walletId))) throw new Error('wallet not found')
+      if (!(await activeWriteGrant(db, walletId, key.tenantId, dataType))) throw new Error('no live write grant for this consumer + wallet + data_type')
       const sourceType = args.source_type === 'tool' ? 'tool' : 'self'
       const { id } = await writeSelfRecord(db, { walletId, dataType, payload: args.payload, sourceType, actor: key.tenantId })
       return { ok: true, id, data_type: dataType, source_type: sourceType }
@@ -140,6 +141,7 @@ const TOOLS: Tool[] = [
       const walletId = str(args.wallet_id)
       if (!walletId) throw new Error('wallet_id is required')
       if (!(await walletExists(db, walletId))) throw new Error('wallet not found')
+      if (!(await activeWriteGrant(db, walletId, key.tenantId, 'credential'))) throw new Error('no live write grant for this consumer + wallet')
       const input = inputFrom(args)
       if (!input) throw new Error('provide `credential`, `jwt`, or `manual` metadata')
       const sourceType = args.source_type === 'issued' ? 'issued' : 'imported'

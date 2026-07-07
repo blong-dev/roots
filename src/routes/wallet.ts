@@ -14,7 +14,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../auth'
 import { consumerAuth, delegatedHolderAuth, requireScope } from '../auth'
-import { activeGrant, logAccess } from '../grants'
+import { activeReadGrant, logAccess } from '../grants'
 import { dbFirst, dbRun } from '../db'
 
 const wallet = new Hono<Env>()
@@ -32,7 +32,7 @@ wallet.get('/:id/records', consumerAuth, requireScope('credentials:read'), async
     return c.json({ error: 'data_type and purpose are required — reads are scoped, not blanket' }, 400)
   }
 
-  const grant = await activeGrant(c.env.DB, walletId, reader, dataType, purpose)
+  const grant = await activeReadGrant(c.env.DB, walletId, reader, dataType, purpose)
   if (!grant) {
     await logAccess(c.env.DB, { walletId, reader, dataType, purpose, outcome: 'denied' })
     return c.json({ error: 'no live grant for this wallet + data_type + purpose' }, 403)
@@ -55,21 +55,24 @@ wallet.get('/:id/records', consumerAuth, requireScope('credentials:read'), async
 // guid:roots-wallet-grant-create
 wallet.post('/:id/grants', delegatedHolderAuth, async (c) => {
   const walletId = c.req.param('id')
-  const b = await c.req.json<{ reader?: string; data_type?: string; purpose?: string }>().catch(() => null)
-  const reader = b?.reader?.trim()
-  const purpose = b?.purpose?.trim()
-  if (!reader || !purpose) return c.json({ error: 'reader and purpose required' }, 400)
+  const b = await c.req.json<{ grantee?: string; capability?: string; data_type?: string; purpose?: string }>().catch(() => null)
+  const grantee = b?.grantee?.trim()
+  const capability = b?.capability === 'write' ? 'write' : 'read'
+  const purpose = b?.purpose?.trim() || null
+  if (!grantee) return c.json({ error: 'grantee required' }, 400)
+  // Reads are consent-gated per purpose; writes have no purpose.
+  if (capability === 'read' && !purpose) return c.json({ error: 'purpose required for a read grant' }, 400)
   const w = await dbFirst<{ id: string }>(c.env.DB, 'SELECT id FROM wallets WHERE id = ?', walletId)
   if (!w) return c.json({ error: 'wallet not found' }, 404)
   const dataType = b?.data_type?.trim() || null
   const id = crypto.randomUUID()
   await dbRun(
     c.env.DB,
-    `INSERT INTO grants (id, wallet_id, reader, data_type, purpose, granted_by)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    id, walletId, reader, dataType, purpose, c.get('holder') ?? 'operator',
+    `INSERT INTO grants (id, wallet_id, grantee, capability, data_type, purpose, granted_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    id, walletId, grantee, capability, dataType, capability === 'write' ? null : purpose, c.get('holder') ?? 'operator',
   )
-  return c.json({ ok: true, id, wallet_id: walletId, reader, data_type: dataType, purpose })
+  return c.json({ ok: true, id, wallet_id: walletId, grantee, capability, data_type: dataType, purpose: capability === 'write' ? null : purpose })
 })
 
 // guid:roots-wallet-grant-revoke — append-only: stamp revoked_at, never delete
@@ -85,7 +88,7 @@ wallet.post('/:id/grants/:gid/revoke', delegatedHolderAuth, async (c) => {
 // guid:roots-wallet-grant-list
 wallet.get('/:id/grants', delegatedHolderAuth, async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT id, reader, data_type, purpose, granted_at, revoked_at, granted_by
+    `SELECT id, grantee, capability, data_type, purpose, granted_at, revoked_at, granted_by
        FROM grants WHERE wallet_id = ? ORDER BY granted_at DESC`,
   ).bind(c.req.param('id')).all()
   return c.json({ wallet_id: c.req.param('id'), grants: results })

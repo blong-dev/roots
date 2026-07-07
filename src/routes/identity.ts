@@ -94,6 +94,14 @@ identity.post('/wallets', consumerAuth, requireScope('wallets:create'), async (c
 
   // Won the binding — mint the wallet's key (server-custodied; handoff moves it later).
   await getOrCreateReceiverKey(c.env.DB, kek, id)
+  // Silent-wallet bootstrap: the creating consumer may contribute to the wallet
+  // it just created (write grant, all types). The holder can revoke it later.
+  await dbRun(
+    c.env.DB,
+    `INSERT INTO grants (id, wallet_id, grantee, capability, data_type, purpose, granted_by)
+     VALUES (?, ?, ?, 'write', NULL, NULL, 'system:creation')`,
+    crypto.randomUUID(), id, c.get('reader') ?? 'consumer',
+  )
   return c.json({ ok: true, existing: false, wallet_id: id, did })
 })
 

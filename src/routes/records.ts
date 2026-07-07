@@ -21,6 +21,7 @@ import { consumerAuth, delegatedHolderAuth, requireScope } from '../auth'
 import { dbFirst } from '../db'
 import { verifyExternal, type ExternalInput } from '../credentials/verify-external'
 import { walletExists, toExternalInput, writeSelfRecord, writeCredentialRecord } from '../records-core'
+import { activeWriteGrant } from '../grants'
 
 const records = new Hono<Env>()
 
@@ -40,9 +41,13 @@ records.post('/:id/records', consumerAuth, requireScope('credentials:import'), a
   const dataType = b?.data_type?.trim()
   if (!dataType) return c.json({ error: 'data_type required' }, 400)
   if (b?.payload === undefined || b?.payload === null) return c.json({ error: 'payload required' }, 400)
+  const consumer = c.get('reader') ?? 'consumer'
+  if (!(await activeWriteGrant(c.env.DB, walletId, consumer, dataType))) {
+    return c.json({ error: 'no live write grant for this consumer + wallet + data_type' }, 403)
+  }
   const sourceType = b.source_type === 'tool' ? 'tool' : 'self'
   const { id } = await writeSelfRecord(c.env.DB, {
-    walletId, dataType, payload: b.payload, sourceType, sourceRef: b.source_ref ?? null, actor: c.get('reader') ?? 'consumer',
+    walletId, dataType, payload: b.payload, sourceType, sourceRef: b.source_ref ?? null, actor: consumer,
   })
   return c.json({ ok: true, id, data_type: dataType, source_type: sourceType })
 })
@@ -55,9 +60,13 @@ records.post('/:id/credentials', consumerAuth, requireScope('credentials:import'
   const body = await c.req.json<{ kind?: string; doc?: unknown; token?: string; meta?: unknown; source_type?: string }>().catch(() => null)
   const input = body && toExternalInput(body)
   if (!input) return c.json({ error: 'provide a credential ({doc}/{token}/{manual meta})' }, 400)
+  const consumer = c.get('reader') ?? 'issuer'
+  if (!(await activeWriteGrant(c.env.DB, walletId, consumer, 'credential'))) {
+    return c.json({ error: 'no live write grant for this consumer + wallet' }, 403)
+  }
   const sourceType = body?.source_type === 'issued' ? 'issued' : 'imported'
   const { id, report } = await writeCredentialRecord(c.env.DB, {
-    walletId, input, sourceType, actor: c.get('reader') ?? 'issuer',
+    walletId, input, sourceType, actor: consumer,
   })
   // tier is a reading — returned for convenience, never stored.
   return c.json({ ok: true, id, tier: report.tier, issuer: report.issuer ?? null, alignments: report.alignments ?? [] })
