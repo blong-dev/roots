@@ -143,7 +143,9 @@ but the source of truth is the recomputation.
 Grounded in `wallet-v0.md` §4–5; the credential routes already exist in Telekora and move over.
 
 - **Identity:** `POST /wallets` (create + bind IdP; the silent-wallet entry) · `GET /w/:id/did.jsonl`
-  (did:webvh history) · `GET /w/:id/did.json`.
+  (did:webvh history) · `GET /w/:id/did.json`. **NOT YET BUILT** — the last P1 route. Tests seed wallets
+  directly; Telekora can't yet create a wallet on signup. This is the did:webvh mint + DID-doc serving,
+  which also unblocks external verification of the export proof and issuer resolution. Next.
 - **Records:** `POST /w/:id/records` (self/tool data, typed, validated) · `GET /w/:id/records`
   (consent-gated read, logs to `access_log`) · retract / reinstate / history (moved verbatim).
   **BUILT** (`f6062b4`): the read route + grant gate. See the consent model below.
@@ -153,7 +155,12 @@ Grounded in `wallet-v0.md` §4–5; the credential routes already exist in Telek
   states + full audit chain + identities + grants + access log). **BUILT** (`c5128f3`): eddsa-jcs-2022
   proof via the credential engine's own signing path, signer pubkey embedded → integrity-verifiable
   OFFLINE. Hard rule #4. (Per-record decrypt on export is future; envelopes ship as-is today.)
-- **Issuers:** `GET/POST /issuers` (registry, moved).
+- **Issuers:** `GET/POST /issuers` (registry, moved). **BUILT** (`fe7a102`).
+- **Agent surface (MCP):** `GET/POST /mcp` — JSON-RPC over Streamable HTTP, scoped-API-key auth.
+  **BUILT** (`17a4709`): tools `verify_credential`, `read_records` (consent-gated, logged), `write_record`,
+  `import_credential`, `list_trusted_issuers`. Re-expressed on roots' model — reads honor the grant gate;
+  no retract tool (holder action); no tenant-holdings tool (wallet-scoped). Shares `records-core` with the
+  HTTP write routes so the two paths can't diverge.
 - **Auth:** scoped API keys + operator token + MCP (moved); plus per-wallet *holder* auth (the human
   reads/exports their own wallet).
 
