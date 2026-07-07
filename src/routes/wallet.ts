@@ -78,7 +78,19 @@ wallet.get('/:id/records', consumerAuth, requireScope('credentials:read'), async
       const p = String(r.payload ?? '').trim()
       let input: ExternalInput | null = null
       if (/^eyJ[\w-]+\.[\w-]+\.[\w-]+$/.test(p)) input = { kind: 'jwt', token: p }
-      else { try { input = { kind: 'json', doc: JSON.parse(p) } } catch { input = null } }
+      else {
+        try {
+          const doc = JSON.parse(p) as Record<string, unknown>
+          if (doc && doc.kind === 'manual' && doc.meta && typeof doc.meta === 'object') {
+            input = { kind: 'manual', meta: doc.meta as Record<string, string> }
+          } else if (doc && !doc.proof && !doc['@context'] && (doc.issuerName || doc.credentialName)) {
+            // legacy manual rows stored as bare meta (pre-envelope)
+            input = { kind: 'manual', meta: doc as unknown as Record<string, string> }
+          } else {
+            input = { kind: 'json', doc }
+          }
+        } catch { input = null }
+      }
       if (!input) return { ...r, tier: 'self-reported' }
       const rep = await verifyExternal(input, c.env.DB)
       return {

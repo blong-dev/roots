@@ -72,9 +72,12 @@ export async function writeCredentialRecord(
 ): Promise<{ id: string; report: ExternalReport }> {
   const report = await verifyExternal(p.input, db)
   const issuerId = report.issuer?.id ? await upsertIssuer(db, report.issuer.id, report.issuer.name ?? null) : null
+  // Manual credentials are stored as a {kind:'manual', meta} envelope so a
+  // read-time verify can reconstruct the input kind (bare meta JSON is
+  // indistinguishable from a VC document).
   const payload = p.input.kind === 'jwt' ? p.input.token
     : p.input.kind === 'json' ? JSON.stringify(p.input.doc)
-    : JSON.stringify(p.input.meta ?? {})
+    : JSON.stringify({ kind: 'manual', meta: p.input.meta ?? {} })
   const sealed = await sealPayload(p.dataKeyB64, payload)
   const alignmentJson = report.alignments && report.alignments.length ? JSON.stringify(report.alignments) : null
   const id = crypto.randomUUID()

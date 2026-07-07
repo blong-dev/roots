@@ -200,4 +200,52 @@ records.get('/:id/records/:rid', delegatedHolderAuth, async (c) => {
   return c.json({ record: { ...rec, payload: pt } })
 })
 
+// ---------------------------------------------------------------- contributions (mounted at /contributions)
+// Contributor-addressed record access: a consumer reaches ITS OWN contribution by
+// source_ref alone (unique per contributor by construction), with no wallet id in
+// hand — the Stage-4 path where the consumer keeps no local mirror. Ambiguity
+// (same ref reused across wallets) is a 409, never a guess.
+export const contributions = new Hono<Env>()
+
+// guid:roots-contributions-load
+async function loadContribution(c: Context<Env>): Promise<{ rec?: Record<string, unknown>; err?: Response }> {
+  const ref = c.req.param('ref')!
+  const consumer = c.get('reader')!
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, wallet_id, data_type, state, contributor FROM records WHERE contributor = ? AND source_ref = ? LIMIT 2',
+  ).bind(consumer, ref).all<Record<string, unknown>>()
+  if (results.length === 0) return { err: c.json({ error: 'no contribution with that source_ref' }, 404) }
+  if (results.length > 1) return { err: c.json({ error: 'ambiguous source_ref (multiple contributions)' }, 409) }
+  return { rec: results[0] }
+}
+
+// guid:roots-contributions-get
+contributions.get('/:ref', consumerAuth, requireScope('credentials:read'), async (c) => {
+  const { rec, err } = await loadContribution(c)
+  if (err) return err
+  return c.json({ id: rec!.id, wallet_id: rec!.wallet_id, data_type: rec!.data_type, state: rec!.state })
+})
+
+// guid:roots-contributions-transition
+async function contributionLifecycle(c: Context<Env>, event: 'retracted' | 'reinstated'): Promise<Response> {
+  const { rec, err } = await loadContribution(c)
+  if (err) return err
+  const from = event === 'retracted' ? 'active' : 'retracted'
+  const to = event === 'retracted' ? 'retracted' : 'active'
+  if (rec!.state !== from) return c.json({ error: `record is already ${rec!.state}` }, 409)
+  const b = await c.req.json<{ reason?: string }>().catch(() => null)
+  const reason = typeof b?.reason === 'string' ? b.reason.slice(0, 500) : null
+  await c.env.DB.batch([
+    c.env.DB.prepare(`UPDATE records SET state = ?, updated_at = datetime('now') WHERE id = ?`).bind(to, rec!.id),
+    c.env.DB.prepare(`INSERT INTO record_events (id, record_id, event, reason, actor) VALUES (?, ?, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), rec!.id, event, reason, c.get('reader')!),
+  ])
+  return c.json({ ok: true, id: rec!.id, wallet_id: rec!.wallet_id, state: to, event })
+}
+
+// guid:roots-contributions-retract
+contributions.post('/:ref/retract', consumerAuth, requireScope('credentials:retract'), (c) => contributionLifecycle(c, 'retracted'))
+// guid:roots-contributions-reinstate
+contributions.post('/:ref/reinstate', consumerAuth, requireScope('credentials:retract'), (c) => contributionLifecycle(c, 'reinstated'))
+
 export default records

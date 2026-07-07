@@ -11,7 +11,7 @@
 import { Hono } from 'hono'
 import type { D1Database } from '@cloudflare/workers-types'
 import wallet from './routes/wallet'
-import records from './routes/records'
+import records, { contributions } from './routes/records'
 import issuers from './routes/issuers'
 import exportRoutes from './routes/export'
 import mcp from './routes/mcp'
@@ -48,6 +48,8 @@ app.route('/w', wallet)
 app.route('/w', records)
 // The trust registry.
 app.route('/issuers', issuers)
+// Contributor-addressed access to one's own contributions (Stage-4 lifecycle).
+app.route('/contributions', contributions)
 // Sovereignty: the holder leaves with a signed bundle of everything.
 app.route('/w', exportRoutes)
 // Agent surface: JSON-RPC MCP over the same scoped API keys + consent gate.
