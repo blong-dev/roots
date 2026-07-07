@@ -1,10 +1,10 @@
 /**
- * crypto.ts — envelope encryption for per-tenant secrets.
+ * crypto.ts — envelope encryption for secrets at rest.
  *
- * One key-encryption key (TELEKORA_KEK, 32 random bytes base64) lives in
- * Cloudflare Secrets Store. Per-tenant LLM API keys are AES-GCM encrypted
- * under it and only `{ciphertext, iv}` (base64) are stored in D1. Plaintext
- * keys are never persisted, logged, or returned by any endpoint.
+ * One key-encryption key (ROOTS_KEK, 32 random bytes base64) lives in Cloudflare
+ * Secrets Store. Issuer/receiver private JWKs are AES-GCM encrypted under it and
+ * only `{ciphertext, iv}` (base64) are stored in D1. Plaintext private keys are
+ * never persisted, logged, or returned by any endpoint.
  */
 function b64encode(bytes: Uint8Array): string {
   let s = ''
@@ -22,7 +22,7 @@ function b64decode(s: string): Uint8Array {
 async function importKek(kekB64: string): Promise<CryptoKey> {
   const raw = b64decode(kekB64.trim())
   if (raw.length !== 32) {
-    throw new Error(`TELEKORA_KEK must be 32 bytes base64 (got ${raw.length})`)
+    throw new Error(`ROOTS_KEK must be 32 bytes base64 (got ${raw.length})`)
   }
   return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, [
     'encrypt',

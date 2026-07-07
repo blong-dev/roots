@@ -72,13 +72,27 @@ identity.post('/wallets', consumerAuth, requireScope('wallets:create'), async (c
   const id = crypto.randomUUID()
   const did = walletDid(id)
   await dbRun(c.env.DB, 'INSERT INTO wallets (id, did) VALUES (?, ?)', id, did)
-  await dbRun(
-    c.env.DB,
+  const ins = await c.env.DB.prepare(
     `INSERT INTO wallet_identities (wallet_id, provider, provider_uid) VALUES (?, ?, ?)
      ON CONFLICT (provider, provider_uid) DO NOTHING`,
-    id, provider, providerUid,
-  )
-  // Mint the wallet's key now (server-custodied; the handoff moves it later).
+  ).bind(id, provider, providerUid).run()
+
+  // Lost a concurrent same-identity race: our identity insert was a no-op, so
+  // our wallet is an unbound orphan. Drop it and return the winner — never hand
+  // back a wallet id whose identity binding didn't take.
+  if (ins.meta.changes === 0) {
+    await dbRun(c.env.DB, 'DELETE FROM wallets WHERE id = ?', id)
+    const owner = await dbFirst<{ wallet_id: string }>(
+      c.env.DB, 'SELECT wallet_id FROM wallet_identities WHERE provider = ? AND provider_uid = ?', provider, providerUid,
+    )
+    const w = owner && await dbFirst<{ id: string; did: string; verification_tier: string }>(
+      c.env.DB, 'SELECT id, did, verification_tier FROM wallets WHERE id = ?', owner.wallet_id,
+    )
+    if (!w) return c.json({ error: 'wallet creation raced and could not resolve — retry' }, 409)
+    return c.json({ ok: true, existing: true, wallet_id: w.id, did: w.did, verification_tier: w.verification_tier })
+  }
+
+  // Won the binding — mint the wallet's key (server-custodied; handoff moves it later).
   await getOrCreateReceiverKey(c.env.DB, kek, id)
   return c.json({ ok: true, existing: false, wallet_id: id, did })
 })
