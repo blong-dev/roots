@@ -1,8 +1,12 @@
 # roots — deploy readiness
 
-Status as of the pre-deploy security audit. roots is **not yet deployed**
-(`wrangler.toml` still has `database_id = TODO`). This is the checklist + the
-known-posture record for when we go live.
+**Status: LIVE (Phase A) — 2026-07-07.** Deployed to `id.dreamtree.org`
+(version 27ab6e8a). D1 `roots` (94a1f052) with migrations 0001–0008; `ROOTS_KEK`
+in the account Secrets Store; `ROOTS_OPS_TOKEN` set. Public routes serve
+(`/health`, `/data-types`, DID routing). **Phase B not yet done** — API Shield
+mTLS, WAF rate-limits, and the Telekora API key + delegation DID are deferred
+until a consumer connects (see runbook steps 6–7 + "known v0 posture"). The
+runbook below is retained for reference / re-deploy.
 
 ## Deploy runbook
 
