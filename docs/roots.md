@@ -146,6 +146,7 @@ Grounded in `wallet-v0.md` §4–5; the credential routes already exist in Telek
   (did:webvh history) · `GET /w/:id/did.json`.
 - **Records:** `POST /w/:id/records` (self/tool data, typed, validated) · `GET /w/:id/records`
   (consent-gated read, logs to `access_log`) · retract / reinstate / history (moved verbatim).
+  **BUILT** (`f6062b4`): the read route + grant gate. See the consent model below.
 - **Credentials:** `POST /w/:id/credentials` (an issuer writes a VC into the wallet) ·
   `GET /credentials/:id/verify` (the moved verifier) · import (moved).
 - **Export (sovereignty):** `GET /w/:id/export` — full decrypt + signed bundle; the user leaves with
@@ -153,6 +154,23 @@ Grounded in `wallet-v0.md` §4–5; the credential routes already exist in Telek
 - **Issuers:** `GET/POST /issuers` (registry, moved).
 - **Auth:** scoped API keys + operator token + MCP (moved); plus per-wallet *holder* auth (the human
   reads/exports their own wallet).
+
+### Consent model — per-read, grant-gated (DECIDED 2026-07-06)
+
+The read path enforces **per-read authorization against standing, scoped, revocable grants** — *not*
+session-scoped implicit trust. The distinction that resolved it: separate *granting* (occasional,
+prompted, scoped by the owner) from *authorization + audit* (per-read, no human in the loop). That
+kills consent fatigue (the only real argument for session) while keeping owner control absolute.
+
+- A `grant` = `(wallet, reader, data_type, purpose)`, append-only, revoked by stamping `revoked_at`.
+- Every read names `data_type` + `purpose` (no blanket reads) and is checked against a live grant on
+  **every request** — so a captured session can't grind the wallet: revocation lands on the *next*
+  read, scope caps the blast radius, and every access (allowed **and denied**) is in `access_log`
+  where the owner sees it.
+- Consumer auth = scoped API key (`reader` identity). Owner/consent routes are **operator-token-gated
+  for now** — interim holder auth until IdP→did:webvh holder sessions ship (`wallet-spec.md` L2 Q5).
+- Verified end-to-end (9/9): deny-before-grant, allow-with-grant (retracted excluded), purpose-match,
+  revoke-lands-next-read, denied-probe logging.
 
 ## 6. How Telekora becomes a client (the extraction)
 
@@ -191,7 +209,9 @@ The move that makes roots the moat rather than a feature trapped in one app:
 - **dreamtree-app (workbook) migration onto roots** — v0 leaves it dual-running; Telekora is the only
   consumer.
 - **Open decisions** carried from `wallet-spec.md`: cross-IdP merging (L1 Q4), smart-content read
-  surface / encryption boundary (L2 Q6/Q7), PDS sync, the public SDK shape.
+  surface / encryption boundary (L2 Q6/Q7), PDS sync, the public SDK shape (L6 Q20). *Read-consent
+  granularity (L6 Q21) is now settled — per-read, above.* Holder-session auth (replacing the interim
+  operator gate) and issuer-write consent UX (L6 Q22) remain.
 
 ---
 
