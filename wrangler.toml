@@ -38,3 +38,12 @@ secret_name = "ROOTS_KEK"
 # Enable the mTLS second factor once API Shield is configured (see deploy-readiness.md):
 #   wrangler secret put ROOTS_REQUIRE_MTLS         # any non-empty value turns it on
 #   wrangler secret put ROOTS_MTLS_FINGERPRINTS    # optional CSV of allowed client-cert SHA-256 fingerprints
+
+# Anchoring: point roots at anchord (the chain's HTTP anchor seam on m3).
+# ANCHOR_TOKEN is a secret:  wrangler secret put ANCHOR_TOKEN
+[vars]
+ANCHOR_URL = "https://anchor.dreamtree.org"
+
+# Cron: sweep un-anchored active records (MCP writes, retries, backfill).
+[triggers]
+crons = ["*/2 * * * *"]

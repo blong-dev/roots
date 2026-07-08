@@ -8,6 +8,7 @@
  *
  * Sequencing: dual-run alongside Telekora, then staged extract. See docs/roots.md.
  */
+import { anchorSweep } from './anchor'
 import { Hono } from 'hono'
 import type { D1Database } from '@cloudflare/workers-types'
 import wallet from './routes/wallet'
@@ -28,6 +29,8 @@ export interface Bindings {
   ROOTS_DELEGATION_ISSUERS?: string // CSV of DIDs allowed to vouch for holders (e.g. did:web:telekora.com)
   ROOTS_REQUIRE_MTLS?: string // when set (non-empty), authenticated routes require a valid client cert (Cloudflare API Shield)
   ROOTS_MTLS_FINGERPRINTS?: string // optional CSV of allowed client-cert SHA-256 fingerprints (pin specific consumers)
+  ANCHOR_URL?: string // anchord base URL (e.g. https://anchor.dreamtree.org); unset disables anchoring
+  ANCHOR_TOKEN?: string // Bearer for anchord
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -43,10 +46,11 @@ app.get('/stats', async (c) => {
   const row = await c.env.DB.prepare(
     `SELECT (SELECT COUNT(*) FROM wallets) AS wallets,
             (SELECT COUNT(*) FROM records WHERE state = 'active') AS records,
+            (SELECT COUNT(*) FROM records WHERE state = 'active' AND anchor_state = 'anchored') AS anchored,
             (SELECT COUNT(*) FROM issuers) AS issuers`,
-  ).first<{ wallets: number; records: number; issuers: number }>()
+  ).first<{ wallets: number; records: number; anchored: number; issuers: number }>()
   return c.json(
-    { wallets: row?.wallets ?? 0, records: row?.records ?? 0, issuers: row?.issuers ?? 0 },
+    { wallets: row?.wallets ?? 0, records: row?.records ?? 0, anchored: row?.anchored ?? 0, issuers: row?.issuers ?? 0 },
     200,
     { 'cache-control': 'public, max-age=300', 'access-control-allow-origin': '*' },
   )
@@ -76,4 +80,12 @@ app.route('/mcp', mcp)
 // Operator-only key management (KEK rotation).
 app.route('/admin', admin)
 
-export default app
+// Cron sweep: anchor any active record still pending (MCP writes, prior
+// failures, and the pre-anchoring backfill). Bounded per tick; runs until dry.
+const scheduled: ExportedHandlerScheduledHandler<Bindings> = async (_event, env, ctx) => {
+  // Small batch per tick — each anchor blocks on chain inclusion (~2-4s), so 8
+  // keeps a tick well inside the Workers time budget; the schedule catches up.
+  ctx.waitUntil(anchorSweep(env, env.DB, 8))
+}
+
+export default { fetch: app.fetch, scheduled }

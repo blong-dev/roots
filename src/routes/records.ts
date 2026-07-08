@@ -21,6 +21,7 @@ import { consumerAuth, delegatedHolderAuth, requireScope } from '../auth'
 import { dbFirst } from '../db'
 import { verifyExternal, type ExternalInput } from '../credentials/verify-external'
 import { walletExists, toExternalInput, writeSelfRecord, writeCredentialRecord } from '../records-core'
+import { anchorRecord } from '../anchor'
 import { activeWriteGrant } from '../grants'
 import { resolveKek, getWalletDataKey, openPayload } from '../wallet-crypto'
 import { lookupDataType } from '../data-types'
@@ -64,6 +65,7 @@ records.post('/:id/records', consumerAuth, requireScope('credentials:import'), a
   const { id } = await writeSelfRecord(c.env.DB, {
     walletId, dataType, payload: b.payload, sourceType, sourceRef: b.source_ref ?? null, actor: consumer, encrypt: entry.encrypted, dataKeyB64,
   })
+  c.executionCtx.waitUntil(anchorRecord(c.env, c.env.DB, id))
   return c.json({ ok: true, id, data_type: dataType, source_type: sourceType, encrypted: entry.encrypted })
 })
 
@@ -91,6 +93,7 @@ records.post('/:id/credentials', consumerAuth, requireScope('credentials:import'
   const { id, report } = await writeCredentialRecord(c.env.DB, {
     walletId, dataType, input, sourceType, actor: consumer, dataKeyB64, sourceRef: body?.source_ref?.trim() || null,
   })
+  c.executionCtx.waitUntil(anchorRecord(c.env, c.env.DB, id))
   // tier is a reading — returned for convenience, never stored.
   return c.json({ ok: true, id, tier: report.tier, issuer: report.issuer ?? null, alignments: report.alignments ?? [] })
 })

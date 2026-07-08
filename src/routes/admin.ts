@@ -14,8 +14,19 @@ import type { Env } from '../auth'
 import { operatorAuth } from '../auth'
 import { resolveKek } from '../wallet-crypto'
 import { decryptSecret, encryptSecret } from '../crypto'
+import { anchorSweep } from '../anchor'
 
 const admin = new Hono<Env>()
+
+// guid:roots-admin-anchor-backfill
+// Anchor un-anchored active records on demand (backfill / retry failures).
+// Bounded per call; poll until { swept: 0 }. The cron does this automatically,
+// but this gives the operator a controllable trigger.
+admin.post('/anchor/backfill', operatorAuth, async (c) => {
+  const q = Number(c.req.query('limit') ?? '25')
+  const swept = await anchorSweep(c.env, c.env.DB, Number.isFinite(q) && q > 0 ? Math.min(q, 50) : 25)
+  return c.json({ swept })
+})
 
 async function resolveNextKek(env: Env['Bindings']): Promise<string | null> {
   return typeof env.ROOTS_KEK_NEXT === 'string' ? env.ROOTS_KEK_NEXT : (await env.ROOTS_KEK_NEXT?.get()) ?? null
