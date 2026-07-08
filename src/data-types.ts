@@ -53,6 +53,18 @@ export const DATA_TYPES: Record<string, DataTypeEntry> = {
   'dt.profile.identity_story@1': { category: 'profile', encrypted: true, kind: 'record' },
   // dt.dashboard.life@1 (PII)
   'dt.dashboard.life@1': { category: 'dashboard', encrypted: true, kind: 'record' },
+  // dt.artifact.* — Telekora living-instance artifacts (learner-app.md Wave 4;
+  // one record per instance EVENT, source_ref = the instance anchor). Free-text
+  // and people-list types encrypt; scores/selections over authored vocabularies
+  // don't (mirrors response.quiz / personality.mbti).
+  'dt.artifact.reflection@1': { category: 'artifact', encrypted: true, kind: 'record' },
+  'dt.artifact.rating_set@1': { category: 'artifact', encrypted: false, kind: 'record' },
+  'dt.artifact.list@1': { category: 'artifact', encrypted: true, kind: 'record' },
+  'dt.artifact.ranking@1': { category: 'artifact', encrypted: true, kind: 'record' },
+  'dt.artifact.selection@1': { category: 'artifact', encrypted: false, kind: 'record' },
+  'dt.artifact.goal@1': { category: 'artifact', encrypted: true, kind: 'record' },
+  'dt.artifact.checklist@1': { category: 'artifact', encrypted: true, kind: 'record' },
+  'dt.artifact.journal@1': { category: 'artifact', encrypted: true, kind: 'record' },
   // dt.response.* — Telekora silent-wallet writes
   'dt.response.quiz@1': { category: 'response', encrypted: false, kind: 'record' },
   'dt.response.text@1': { category: 'response', encrypted: true, kind: 'record' },
