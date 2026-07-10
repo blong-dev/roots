@@ -51,7 +51,7 @@ wallet.get('/:id/records', consumerAuth, requireScope('credentials:read'), async
   const withRetracted = grant.scope === 'own' && c.req.query('include_retracted') === '1'
   const stateFilter = withRetracted ? '' : "AND state = 'active'"
   const stmt = c.env.DB.prepare(
-    `SELECT id, data_type, payload, encrypted, source_type, source_ref, issuer_id, alignment_json, state, created_at, updated_at
+    `SELECT id, data_type, payload, encrypted, source_type, source_ref, issuer_id, alignment_json, state, created_at, updated_at, contributor
        FROM records
       WHERE wallet_id = ? AND data_type = ? ${stateFilter} ${ownFilter} ${refFilter}
       ORDER BY created_at DESC`,
