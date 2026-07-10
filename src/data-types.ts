@@ -65,6 +65,7 @@ export const DATA_TYPES: Record<string, DataTypeEntry> = {
   'dt.artifact.goal@1': { category: 'artifact', encrypted: true, kind: 'record' },
   'dt.artifact.checklist@1': { category: 'artifact', encrypted: true, kind: 'record' },
   'dt.artifact.journal@1': { category: 'artifact', encrypted: true, kind: 'record' },
+  'dt.artifact.bucket_set@1': { category: 'artifact', encrypted: true, kind: 'record' },
   // dt.response.* — Telekora silent-wallet writes
   'dt.response.quiz@1': { category: 'response', encrypted: false, kind: 'record' },
   'dt.response.text@1': { category: 'response', encrypted: true, kind: 'record' },
