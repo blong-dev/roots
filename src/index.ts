@@ -18,6 +18,7 @@ import exportRoutes from './routes/export'
 import mcp from './routes/mcp'
 import identity from './routes/identity'
 import admin from './routes/admin'
+import status from './routes/status'
 import { LANDING_HTML } from './landing'
 import { DATA_TYPES } from './data-types'
 
@@ -77,8 +78,10 @@ app.route('/contributions', contributions)
 app.route('/w', exportRoutes)
 // Agent surface: JSON-RPC MCP over the same scoped API keys + consent gate.
 app.route('/mcp', mcp)
-// Operator-only key management (KEK rotation).
+// Operator-only key management (KEK rotation, API keys, credential status).
 app.route('/admin', admin)
+// Public W3C BitstringStatusList surface (revocation/suspension lists).
+app.route('/status', status)
 
 // Cron sweep: anchor any active record still pending (MCP writes, prior
 // failures, and the pre-anchoring backfill). Bounded per tick; runs until dry.

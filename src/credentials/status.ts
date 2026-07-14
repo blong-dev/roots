@@ -76,6 +76,7 @@ export async function setCredentialStatus(
 }
 
 export interface CredentialStatusRow {
+  tenant_id: string
   status_index: number
   revoked: number
   suspended: number
@@ -89,9 +90,28 @@ export async function getCredentialStatus(
 ): Promise<CredentialStatusRow | null> {
   return dbFirst<CredentialStatusRow>(
     db,
-    'SELECT status_index, revoked, suspended FROM credential_status WHERE credential_id = ?',
+    'SELECT tenant_id, status_index, revoked, suspended FROM credential_status WHERE credential_id = ?',
     credentialId,
   )
+}
+
+/** Flip a status bit AND record who/why (revocation audit, migration 0010). */
+// guid:status-setStatusAudited
+export async function setCredentialStatusAudited(
+  db: D1Database,
+  credentialId: string,
+  tenantId: string,
+  purpose: StatusPurpose,
+  value: boolean,
+  by: string,
+  reason: string | null,
+): Promise<boolean> {
+  const col = purpose === 'revocation' ? 'revoked' : 'suspended'
+  const r = await db.prepare(
+    `UPDATE credential_status SET ${col} = ?, updated_at = datetime('now'), updated_by = ?, reason = ?
+     WHERE credential_id = ? AND tenant_id = ?`,
+  ).bind(value ? 1 : 0, by, reason, credentialId, tenantId).run()
+  return (r.meta.changes ?? 0) > 0
 }
 
 /** The two credentialStatus entries stamped into every issued credential. */

@@ -25,6 +25,7 @@ import { anchorRecord } from '../anchor'
 import { activeWriteGrant } from '../grants'
 import { resolveKek, getWalletDataKey, openPayload } from '../wallet-crypto'
 import { lookupDataType } from '../data-types'
+import { DID_WEB_DOMAIN } from '../credentials/keys'
 
 const records = new Hono<Env>()
 
@@ -92,6 +93,7 @@ records.post('/:id/credentials', consumerAuth, requireScope('credentials:import'
   const sourceType = body?.source_type === 'issued' ? 'issued' : 'imported'
   const { id, report } = await writeCredentialRecord(c.env.DB, {
     walletId, dataType, input, sourceType, actor: consumer, dataKeyB64, sourceRef: body?.source_ref?.trim() || null,
+    origin: `https://${DID_WEB_DOMAIN}`, kek,
   })
   c.executionCtx.waitUntil(anchorRecord(c.env, c.env.DB, id))
   // tier is a reading — returned for convenience, never stored.

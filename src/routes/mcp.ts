@@ -22,6 +22,7 @@ import { activeReadGrant, activeWriteGrant, logAccess } from '../grants'
 import { writeSelfRecord, writeCredentialRecord, walletExists } from '../records-core'
 import { resolveKek, getWalletDataKey, decryptRecords } from '../wallet-crypto'
 import { lookupDataType } from '../data-types'
+import { DID_WEB_DOMAIN } from '../credentials/keys'
 
 type Bindings = Env['Bindings']
 
@@ -169,7 +170,7 @@ const TOOLS: Tool[] = [
       if (!kek) throw new Error('record encryption unavailable (ROOTS_KEK not provisioned)')
       const dataKeyB64 = await getWalletDataKey(env.DB, kek, walletId)
       const sourceType = args.source_type === 'issued' ? 'issued' : 'imported'
-      const { id, report } = await writeCredentialRecord(env.DB, { walletId, dataType, input, sourceType, actor: key.tenantId, dataKeyB64 })
+      const { id, report } = await writeCredentialRecord(env.DB, { walletId, dataType, input, sourceType, actor: key.tenantId, dataKeyB64, origin: `https://${DID_WEB_DOMAIN}`, kek })
       return { ok: true, id, tier: report.tier, issuer: report.issuer ?? null, alignments: report.alignments ?? [] }
     },
   },

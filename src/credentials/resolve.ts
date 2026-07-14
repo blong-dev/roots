@@ -16,6 +16,7 @@ import type { D1Database } from '@cloudflare/workers-types'
 import { dbFirst } from '../db'
 import { multibase58Decode } from './canonical'
 import { publicKeyFromDidKey } from './keys'
+import { verifyWebvhLog } from './webvh'
 
 // Ed25519 multicodec prefix inside a Multikey (z6Mk…): varint 0xed 0x01.
 const ED25519_MULTICODEC = [0xed, 0x01]
@@ -221,14 +222,20 @@ export async function resolveIssuerKey(
     } catch { return null }
   }
 
-  // did:webvh — verifiable-history DID. MVP: fetch the log, take the latest
-  // entry's DID document, resolve its key, flag history as unverified.
+  // did:webvh — verifiable-history DID. Fetch the log and VERIFY it end-to-end:
+  // SCID self-certification, entry-hash chain, and per-entry authorized proofs.
+  // Fail closed — a broken/tampered history resolves to no key.
   if (did.startsWith('did:webvh:')) {
     try {
-      const doc = await resolveWebvhLatest(did)
-      if (!doc) return null
-      const k = keyFromVm(pickVerificationMethod(doc, vm), 'did:webvh')
-      return k ? { ...k, historyVerified: false } : null
+      const url = webvhLogUrl(did)
+      if (!url) return null
+      const log = await fetchText(url)
+      const result = await verifyWebvhLog(log)
+      if (!result.verified || !result.doc) return null
+      // The verified log must actually be the log FOR this DID (same scid+domain).
+      if (result.did && result.did !== did) return null
+      const k = keyFromVm(pickVerificationMethod(result.doc, vm), 'did:webvh')
+      return k ? { ...k, historyVerified: true } : null
     } catch { return null }
   }
 
@@ -247,33 +254,15 @@ export async function resolveIssuerKey(
   return null
 }
 
-/** Best-effort did:webvh: fetch did.jsonl, parse the last entry's DID document. */
-// guid:resolve-webvhLatest
+/** The did.jsonl log URL for a did:webvh identifier. did:webvh:<scid>:<domain>[:<path…>] */
+// guid:resolve-webvhLogUrl
 // guid:3e8b1d47-6c29-4a05-9f83-2b7e0a6d5c14
-async function resolveWebvhLatest(did: string): Promise<Record<string, unknown> | null> {
-  // did:webvh:<scid>:<domain>[:<path…>]
+export function webvhLogUrl(did: string): string | null {
   const rest = did.slice('did:webvh:'.length).split(':').map(decodeURIComponent)
   const domain = rest[1]
   if (!domain) return null
   const path = rest.slice(2)
-  const url = path.length === 0
+  return path.length === 0
     ? `https://${domain}/.well-known/did.jsonl`
     : `https://${domain}/${path.join('/')}/did.jsonl`
-  const text = await fetchText(url)
-  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
-  if (lines.length === 0) return null
-  const last = JSON.parse(lines[lines.length - 1]) as unknown
-  // Entry shapes vary by webvh version: object with {state|value} or an array
-  // whose last element carries {value: didDoc}. Extract the DID document.
-  const asObj = last as Record<string, unknown>
-  const state = (asObj.state ?? asObj.value) as Record<string, unknown> | undefined
-  if (state && typeof state === 'object' && 'id' in state) return state
-  if (Array.isArray(last)) {
-    for (const el of last) {
-      const v = (el as { value?: Record<string, unknown> })?.value
-      if (v && typeof v === 'object' && 'id' in v) return v
-    }
-  }
-  if ('id' in asObj && 'verificationMethod' in asObj) return asObj
-  return null
 }

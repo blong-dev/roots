@@ -18,12 +18,12 @@
  */
 import { Hono, type Context } from 'hono'
 import type { Env } from '../auth'
-import { consumerAuth, requireScope } from '../auth'
-import { dbFirst, dbRun } from '../db'
+import { consumerAuth, delegatedHolderAuth, requireScope } from '../auth'
+import { dbAll, dbFirst, dbRun } from '../db'
 import { getOrCreateReceiverKey } from '../credentials/keystore'
 import { DID_WEB_DOMAIN, multikeyFromPublicKey } from '../credentials/keys'
 import { multibase58Decode } from '../credentials/canonical'
-import { createDataIntegrityProof } from '../credentials/di'
+import { buildWebvhInception, buildWebvhHandoffEntry } from '../credentials/webvh'
 
 const identity = new Hono<Env>()
 
@@ -33,10 +33,18 @@ async function resolveKek(c: Context<Env>): Promise<string | null> {
   return typeof c.env.ROOTS_KEK === 'string' ? c.env.ROOTS_KEK : (await c.env.ROOTS_KEK?.get()) ?? null
 }
 
-// A W3C DID doc from a did + the stored RAW-multibase pubkey (converted to the
-// Multikey form the spec + the resolver expect).
-function didDoc(did: string, rawMultibase: string): Record<string, unknown> {
-  const multikey = multikeyFromPublicKey(multibase58Decode(rawMultibase))
+// A multibase Ed25519 Multikey is 34 bytes: 0xed 0x01 (multicodec) + 32-byte key.
+function isEd25519Multikey(mk: string): boolean {
+  try {
+    const d = multibase58Decode(mk)
+    return d.length === 34 && d[0] === 0xed && d[1] === 0x01
+  } catch {
+    return false
+  }
+}
+
+// A W3C DID doc from a did + a Multikey (z6Mk…) publicKeyMultibase.
+function didDocWithMultikey(did: string, multikey: string): Record<string, unknown> {
   const vm = `${did}#key-1`
   return {
     '@context': ['https://www.w3.org/ns/did/v1', 'https://w3id.org/security/multikey/v1'],
@@ -45,6 +53,12 @@ function didDoc(did: string, rawMultibase: string): Record<string, unknown> {
     assertionMethod: [vm],
     authentication: [vm],
   }
+}
+
+// A W3C DID doc from a did + the stored RAW-multibase pubkey (converted to the
+// Multikey form the spec + the resolver expect).
+function didDoc(did: string, rawMultibase: string): Record<string, unknown> {
+  return didDocWithMultikey(did, multikeyFromPublicKey(multibase58Decode(rawMultibase)))
 }
 
 // ---------------------------------------------------------------- create wallet
@@ -117,8 +131,15 @@ identity.post('/wallets', consumerAuth, requireScope('wallets:create'), async (c
 // guid:roots-identity-wallet-diddoc
 identity.get('/w/:id/did.json', async (c) => {
   const id = c.req.param('id')!
-  const w = await dbFirst<{ did: string }>(c.env.DB, 'SELECT did FROM wallets WHERE id = ?', id)
+  const w = await dbFirst<{ did: string; custody_state: string; holder_multikey: string | null }>(
+    c.env.DB, 'SELECT did, custody_state, holder_multikey FROM wallets WHERE id = ?', id,
+  )
   if (!w?.did) return c.json({ error: 'not found' }, 404)
+  // Self-custody: the holder key is authoritative — never serve the retired
+  // server key. (The verifiable did:webvh history in did.jsonl is the full story.)
+  if (w.custody_state === 'self' && w.holder_multikey) {
+    return c.json(didDocWithMultikey(w.did, w.holder_multikey))
+  }
   const rk = await dbFirst<{ public_key_multibase: string }>(
     c.env.DB, 'SELECT public_key_multibase FROM receiver_keys WHERE user_id = ?', id,
   )
@@ -127,6 +148,10 @@ identity.get('/w/:id/did.json', async (c) => {
 })
 
 // ---------------------------------------------------------------- did.jsonl (history)
+// A did:webvh log: the deterministic inception (version 1) regenerated from the
+// wallet's receiver key + created_at, followed by any appended entries (e.g. a
+// custody handoff, version >= 2) persisted in did_log. The log SCID + entry-hash
+// chain + proofs are verifiable by credentials/webvh.ts verifyWebvhLog.
 // guid:roots-identity-wallet-history
 identity.get('/w/:id/did.jsonl', async (c) => {
   const id = c.req.param('id')!
@@ -137,23 +162,65 @@ identity.get('/w/:id/did.jsonl', async (c) => {
   const kek = await resolveKek(c)
   if (!kek) return c.json({ error: 'history signing unavailable (ROOTS_KEK not provisioned)' }, 503)
   const key = await getOrCreateReceiverKey(c.env.DB, kek, id)
-  const doc = didDoc(w.did, key.publicKeyMultibase)
-  const entry: Record<string, unknown> = {
-    '@context': ['https://www.w3.org/ns/credentials/v2'],
-    versionId: '1',
-    versionTime: w.created_at,
-    state: doc,
-  }
-  // Deterministic: `created` is pinned to the wallet's creation, so the inception
-  // entry regenerates identically (Ed25519 is deterministic) — no history table
-  // needed while the log is immutable at v0.
-  const proof = await createDataIntegrityProof(entry, {
-    privateJwk: key.privateJwk,
-    verificationMethod: `${w.did}#key-1`,
-    proofPurpose: 'assertionMethod',
-    created: w.created_at,
+  const serverMultikey = multikeyFromPublicKey(multibase58Decode(key.publicKeyMultibase))
+  const inception = await buildWebvhInception({
+    walletId: id, domain: DID_WEB_DOMAIN, serverMultikey, privateJwk: key.privateJwk, created: w.created_at,
   })
-  return c.text(JSON.stringify({ ...entry, proof }) + '\n', 200, { 'content-type': 'application/jsonl' })
+  const extra = await dbAll<{ entry_json: string }>(
+    c.env.DB, 'SELECT entry_json FROM did_log WHERE wallet_id = ? ORDER BY version', id,
+  )
+  const lines = [JSON.stringify(inception.entry), ...extra.map((r) => r.entry_json)]
+  return c.text(lines.join('\n') + '\n', 200, { 'content-type': 'application/jsonl' })
+})
+
+// ---------------------------------------------------------------- custody handoff
+// The holder takes their own key: they submit a client-generated Ed25519 public
+// key (Multikey), roots appends a chained did:webvh entry rotating authority to
+// it, marks the wallet self-custodied, and disables (retains) the server key.
+// After this the server can no longer sign NEW updates for the wallet — future
+// entries require the holder key, which the server never holds. See
+// docs/custody-handoff.md. Holder-authed (delegation) with operator break-glass.
+// guid:roots-identity-custody-handoff
+identity.post('/w/:id/custody/handoff', delegatedHolderAuth, async (c) => {
+  const id = c.req.param('id')!
+  const w = await dbFirst<{ did: string; created_at: string; custody_state: string }>(
+    c.env.DB, 'SELECT did, created_at, custody_state FROM wallets WHERE id = ?', id,
+  )
+  if (!w?.did) return c.json({ error: 'wallet not found' }, 404)
+  if (w.custody_state === 'self') return c.json({ error: 'wallet is already self-custodied' }, 409)
+  const b = await c.req.json<{ public_key_multibase?: string }>().catch(() => null)
+  const holderMultikey = b?.public_key_multibase?.trim()
+  if (!holderMultikey || !isEd25519Multikey(holderMultikey)) {
+    return c.json({ error: 'public_key_multibase (an Ed25519 Multikey, z6Mk…) required' }, 400)
+  }
+  const kek = await resolveKek(c)
+  if (!kek) return c.json({ error: 'handoff signing unavailable (ROOTS_KEK not provisioned)' }, 503)
+  const key = await getOrCreateReceiverKey(c.env.DB, kek, id)
+  const serverMultikey = multikeyFromPublicKey(multibase58Decode(key.publicKeyMultibase))
+  // Recompute the deterministic inception to chain the handoff onto it, and to
+  // authorize the handoff with the server key (still in inception.updateKeys).
+  const inception = await buildWebvhInception({
+    walletId: id, domain: DID_WEB_DOMAIN, serverMultikey, privateJwk: key.privateJwk, created: w.created_at,
+  })
+  const last = await dbFirst<{ version: number }>(
+    c.env.DB, 'SELECT version FROM did_log WHERE wallet_id = ? ORDER BY version DESC LIMIT 1', id,
+  )
+  const nextVersion = (last?.version ?? 1) + 1
+  const created = new Date().toISOString()
+  const handoff = await buildWebvhHandoffEntry({
+    did: inception.did, scid: inception.scid, version: nextVersion, prevVersionId: inception.versionId,
+    serverMultikey, holderMultikey, privateJwk: key.privateJwk, created,
+  })
+  await c.env.DB.batch([
+    c.env.DB.prepare('INSERT INTO did_log (wallet_id, version, entry_json) VALUES (?, ?, ?)')
+      .bind(id, nextVersion, JSON.stringify(handoff.entry)),
+    c.env.DB.prepare("UPDATE wallets SET custody_state = 'self', holder_multikey = ? WHERE id = ?").bind(holderMultikey, id),
+    c.env.DB.prepare("UPDATE receiver_keys SET retired_at = datetime('now') WHERE user_id = ? AND retired_at IS NULL").bind(id),
+  ])
+  return c.json({
+    ok: true, wallet_id: id, custody_state: 'self',
+    did: inception.did, version_id: handoff.versionId, holder_key: holderMultikey,
+  })
 })
 
 // ---------------------------------------------------------------- did.json (issuer)
