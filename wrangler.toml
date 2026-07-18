@@ -17,6 +17,13 @@ database_id = "94a1f052-e588-4d20-896c-259548596dcf"
 pattern = "id.dreamtree.org"
 custom_domain = true
 
+# The human face of the wallet (share-and-verify + future holder UI).
+# id.dreamtree.org above is PERMANENT (baked into every DID) — this is an
+# ADDITIONAL route, never a replacement.
+[[routes]]
+pattern = "roots.dreamtree.org"
+custom_domain = true
+
 # Secrets Store KEK — wraps issuer/receiver private keys + per-wallet data keys.
 # Reuses the account Secrets Store (same store_id as Telekora's KEK). Provision
 # the secret first:  wrangler secrets-store secret create <store_id> --name ROOTS_KEK

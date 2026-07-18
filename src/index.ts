@@ -18,6 +18,7 @@ import exportRoutes from './routes/export'
 import mcp from './routes/mcp'
 import identity from './routes/identity'
 import admin from './routes/admin'
+import { shareMint, sharePublic } from './routes/shares'
 import ica from './routes/ica'
 import { LANDING_HTML } from './landing'
 import { DATA_TYPES } from './data-types'
@@ -79,6 +80,10 @@ app.route('/contributions', contributions)
 app.route('/w', exportRoutes)
 // Agent surface: JSON-RPC MCP over the same scoped API keys + consent gate.
 app.route('/mcp', mcp)
+// Share-and-verify (docs/share-and-verify.md): holder-minted shares + the
+// public validity page ("check without exposing").
+app.route('/w', shareMint)
+app.route('/s', sharePublic)
 // Operator-only key management (KEK rotation).
 app.route('/admin', admin)
 // CAWG Identity Claims Aggregator (dark until ROOTS_ICA_ENABLED).
