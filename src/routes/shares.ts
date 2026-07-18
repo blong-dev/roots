@@ -10,6 +10,7 @@ import { Hono } from 'hono'
 import type { Bindings } from '../index'
 import { delegatedHolderAuth } from '../auth'
 import { recordCommitment, walletDid } from '../anchor'
+import { resolveKek, getWalletDataKey, openPayload } from '../wallet-crypto'
 
 type Env = { Bindings: Bindings }
 
@@ -33,7 +34,8 @@ shareMint.post('/:id/shares', delegatedHolderAuth, async (c) => {
     | null
   if (!body?.record_id) return c.json({ error: 'record_id required' }, 400)
   const mode = body.mode ?? 'validity'
-  if (mode !== 'validity') return c.json({ error: "S1 supports mode 'validity' only ('read' is S2)" }, 400)
+  if (mode !== 'validity' && mode !== 'read')
+    return c.json({ error: "mode must be 'validity' or 'read'" }, 400)
   const ttl = Math.min(Math.max(Number(body.expires_in_s ?? DEFAULT_TTL_S), 60), MAX_TTL_S)
   const maxUses = body.max_uses != null ? Math.max(1, Number(body.max_uses)) : null
 
@@ -84,6 +86,8 @@ export const sharePublic = new Hono<Env>()
 interface Verdict {
   share_status: 'valid' | 'revoked' | 'expired' | 'exhausted' | 'unknown'
   mode?: string
+  content?: unknown
+  content_error?: string
   record?: {
     exists: true
     state: string
@@ -105,9 +109,9 @@ interface Verdict {
   disclosure: string
 }
 
-async function buildVerdict(c: { env: { DB: Bindings['DB'] } }, token: string): Promise<{ code: number; v: Verdict }> {
+async function buildVerdict(c: { env: Bindings }, token: string): Promise<{ code: number; v: Verdict }> {
   const s = await c.env.DB.prepare(
-    `SELECT st.*, r.state AS r_state, r.data_type, r.payload, r.created_at AS r_created,
+    `SELECT st.*, r.state AS r_state, r.data_type, r.payload, r.encrypted, r.created_at AS r_created,
             r.seed_id, r.anchor_tx, r.anchor_height, r.anchor_state,
             i.name AS issuer_name, i.did_or_iss AS issuer_did, i.status AS issuer_trust
      FROM share_tokens st
@@ -132,7 +136,7 @@ async function buildVerdict(c: { env: { DB: Bindings['DB'] } }, token: string): 
   ).bind(crypto.randomUUID(), s.wallet_id, `share:${token.slice(0, 8)}…`, s.data_type, `share:${String(s.mode)}`).run()
 
   const commitment = await recordCommitment(String(s.record_id), String(s.data_type), String(s.payload))
-  return {
+  const out: { code: number; v: Verdict } = {
     code: 200,
     v: {
       share_status: 'valid',
@@ -158,11 +162,28 @@ async function buildVerdict(c: { env: { DB: Bindings['DB'] } }, token: string): 
         retracted: s.r_state === 'retracted',
       },
       disclosure:
-        'Validity view: this page discloses that the record exists, its type, issuer, dates, ' +
-        'revocation state, and its on-chain anchor — never its content. Each open is logged ' +
-        'to the holder’s wallet audit trail.',
+        String(s.mode) === 'read'
+          ? 'Read view: the holder chose to share this record’s CONTENT with whoever holds this link, revocably. Each open is logged to the holder’s wallet audit trail.'
+          : 'Validity view: this page discloses that the record exists, its type, issuer, dates, revocation state, and its on-chain anchor — never its content. Each open is logged to the holder’s wallet audit trail.',
     },
   }
+  // Read mode (S3): decrypt-at-read through the wallet data key — the share
+  // token IS the capability (holder-minted, expiring, revocable, audited).
+  if (String(s.mode) === 'read') {
+    try {
+      let content = String(s.payload)
+      if (Number(s.encrypted) === 1) {
+        const kek = await resolveKek(c.env)
+        if (!kek) throw new Error('KEK unavailable')
+        const dataKey = await getWalletDataKey(c.env.DB, kek, String(s.wallet_id))
+        content = await openPayload(dataKey, content)
+      }
+      try { out.v.content = JSON.parse(content) } catch { out.v.content = content }
+    } catch {
+      out.v.content_error = 'content could not be opened; the validity facts above still hold'
+    }
+  }
+  return out
 }
 
 function esc(x: unknown): string {
@@ -177,6 +198,10 @@ function renderPage(v: Verdict): string {
   const r = v.record
   const row = (k: string, val: string) =>
     `<tr><td style="color:#667;padding:4px 14px 4px 0;white-space:nowrap">${k}</td><td style="font-family:ui-monospace,monospace;word-break:break-all">${val}</td></tr>`
+  const contentBlock = v.content !== undefined
+    ? '<h2 style="font-size:1rem;margin:1.2rem 0 .3rem">Shared content</h2><pre style="background:#f3f6f4;border:1px solid #dde;border-radius:8px;padding:.8rem;overflow-x:auto;font-size:.82rem">' +
+      esc(typeof v.content === 'string' ? v.content : JSON.stringify(v.content, null, 2)) + '</pre>'
+    : v.content_error ? '<p style="color:#a33">' + esc(v.content_error) + '</p>' : ''
   const body = r ? `<table style="border-collapse:collapse;margin:1rem 0">${[
     row('status', r.retracted ? 'retracted' : 'active'),
     row('type', esc(r.data_type)),
@@ -187,7 +212,7 @@ function renderPage(v: Verdict): string {
     row('anchor', r.anchor.tx
       ? `dreamtree chain · height ${esc(r.anchor.height)} · tx ${esc(r.anchor.tx).slice(0, 16)}… · seed ${esc(r.anchor.seed_id)}`
       : `${esc(r.anchor.state)} (anchoring is asynchronous)`),
-  ].join('')}</table>` : ''
+  ].join('')}</table>${contentBlock}` : ''
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>dreamtree · shared credential check</title>
 <body style="font:16px/1.55 system-ui,sans-serif;max-width:680px;margin:8vh auto;padding:0 1.2rem;color:#182028">
@@ -198,6 +223,28 @@ ${body}
 <p style="color:#889;font-size:.8rem">machine-readable: append <code>?format=json</code> · protocol: <a href="https://dreamtree.org" style="color:#265">dreamtree.org</a></p>
 </body>`
 }
+
+// S6: the embeddable badge — a share link wearing a pixel. Light status only:
+// does NOT count a use and does NOT log (clicking through to /s/{token} does).
+sharePublic.get('/:token/badge.svg', async (c) => {
+  const s = await c.env.DB.prepare(
+    `SELECT st.revoked_at, st.expires_at, r.state
+     FROM share_tokens st JOIN records r ON r.id = st.record_id WHERE st.token = ?`,
+  ).bind(c.req.param('token')).first<Record<string, unknown>>()
+  let label = 'unknown', color = '#8a958f'
+  if (s) {
+    if (s.revoked_at) { label = 'revoked'; color = '#a33' }
+    else if (Date.parse(String(s.expires_at)) < Date.now()) { label = 'expired'; color = '#a33' }
+    else if (s.state === 'retracted') { label = 'retracted'; color = '#a33' }
+    else { label = 'verified · dreamtree'; color = '#1d7a55' }
+  }
+  const w = 26 + label.length * 7
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + (w + 22) + '" height="20" role="img">' +
+    '<rect rx="4" width="' + (w + 22) + '" height="20" fill="#182028"/>' +
+    '<circle cx="11" cy="10" r="4" fill="' + color + '"/>' +
+    '<text x="' + ((w + 44) / 2 - 1) + '" y="14" fill="#fff" font-family="system-ui,sans-serif" font-size="11" text-anchor="middle">' + label + '</text></svg>'
+  return c.body(svg, 200, { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=300' })
+})
 
 sharePublic.get('/:token', async (c) => {
   const { code, v } = await buildVerdict(c, c.req.param('token'))
