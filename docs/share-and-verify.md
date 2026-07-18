@@ -76,7 +76,40 @@ push legal towards just validation" — is a technical ladder too:
   its own backend which relays via delegation (pattern proven by Stage 3b
   plumbing).
 
-## 2. Chain dashboard (public pulse)
+## 2. Holder dashboard (moved up — owner 2026-07-18)
+
+Owner rulings: no Telekora-side Share button (S3 dropped — these are dreamtree
+upgrades); each wallet holder gets a dashboard at roots.dreamtree.org to
+**view, add, verify, remove, and share** their documents and credentials.
+User management REMAINS DEFERRED: the dashboard mounts behind the existing
+delegatedHolderAuth seam (delegation or operator break-glass), and holder
+login is a pluggable front door to be wired when the owner rules on it.
+Nothing in the dashboard presumes a login mechanism.
+
+**Sensitive documents live on the holder's device, never in our storage
+(owner ruling 2026-07-18).** The add flow:
+
+1. Holder picks a file → encrypted CLIENT-SIDE (WebCrypto, AES-GCM, key held
+   client-side) → blob stored in the browser's Origin Private File System.
+2. roots receives ONLY: sha256 commitment + a metadata record
+   (`dt.document.*`, filename, size, mime) → anchored on-chain like any record.
+3. **Verify** = rehash the local file, compare to the anchored commitment:
+   "this exact file, unaltered, anchored at height N" — provable without our
+   infrastructure ever holding a byte of content.
+4. **Share** (validity mode) works unchanged — it is commitment-based.
+   Read-mode sharing of device-held documents is a future, explicit,
+   holder-initiated transfer — never a server-side copy.
+
+The honest trade, stated in the UI: lose the device, lose the blob; the
+record + anchor survive, and re-adding the original file re-verifies.
+Records/credentials issued by tools (the existing corpus) stay hosted as
+today — this ruling covers sensitive document BLOBS.
+
+Verbs → rails: view (holder read path), add (device vault + record write),
+verify (local rehash + record verify + anchor), remove (retract/reinstate,
+append-only, honest), share (S1 tokens).
+
+## 3. Chain dashboard (public pulse)
 
 `roots.dreamtree.org/chain` (or dreamtree.org embed): supply vs peg, batch
 cadence, convergence rate, latest anchors, governance state. Data via the
@@ -84,7 +117,7 @@ no-inbound-door pattern: an m3 job PUSHES a stats JSON outward on a cadence
 (the verify-resolver already holds the outbound seam; a `/stats/push` Bearer
 route on the worker + KV/D1 storage). No chain RPC exposure, ever.
 
-## 3. Docs
+## 4. Docs
 
 - **Agents/developers**: verify API + MCP tools + share JSON format — served
   at verify.dreamtree.org (extend the landing) + a docs page.
@@ -93,7 +126,7 @@ route on the worker + KV/D1 storage). No chain RPC exposure, ever.
   custody, not zero-knowledge; what each share mode exposes) are copy
   requirements, not footnotes.
 
-## 4. Badges (after shares exist)
+## 5. Badges (after shares exist)
 
 An embeddable badge is a share link wearing a pixel:
 `GET /s/{token}/badge.svg` renders current status (valid/revoked/expired)
@@ -119,7 +152,7 @@ Open — owner decisions before the holder login surface is built:
 
 ## Sequencing
 
-S1 share tokens + `/s/{token}` validity mode (smallest full slice, demoable
-with the 23 real Telekora wallets) → S2 read mode via grants → S3 Telekora
-"Share" button → S4 dashboard → S5 docs pass → S6 badges. User-management
+S1 share tokens + validity page [SHIPPED 2026-07-18] → S2 HOLDER DASHBOARD
+(view/add/verify/remove/share, device vault, auth-agnostic) → S3 read-mode
+shares → S4 chain dashboard → S5 docs → S6 badges. User-management
 conversations can proceed in parallel; nothing in S1-S6 depends on them.
