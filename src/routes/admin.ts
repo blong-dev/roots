@@ -14,7 +14,7 @@ import type { Env } from '../auth'
 import { operatorAuth } from '../auth'
 import { resolveKek } from '../wallet-crypto'
 import { decryptSecret, encryptSecret } from '../crypto'
-import { anchorSweep } from '../anchor'
+import { anchorSweep, MAX_ANCHOR_ATTEMPTS } from '../anchor'
 
 const admin = new Hono<Env>()
 
@@ -22,10 +22,23 @@ const admin = new Hono<Env>()
 // Anchor un-anchored active records on demand (backfill / retry failures).
 // Bounded per call; poll until { swept: 0 }. The cron does this automatically,
 // but this gives the operator a controllable trigger.
+//
+// ?reset=1 first clears anchor_attempts on capped-out failed rows, so records
+// the sweep gave up on (attempts >= MAX_ANCHOR_ATTEMPTS) retry once the
+// underlying anchord problem is fixed. Without it, backfill only touches rows
+// still under the cap — same set the cron already sweeps.
 admin.post('/anchor/backfill', operatorAuth, async (c) => {
   const q = Number(c.req.query('limit') ?? '25')
+  let reset = 0
+  if (c.req.query('reset') === '1') {
+    const r = await c.env.DB.prepare(
+      `UPDATE records SET anchor_attempts = 0
+        WHERE state = 'active' AND anchor_state = 'failed' AND anchor_attempts >= ?`,
+    ).bind(MAX_ANCHOR_ATTEMPTS).run()
+    reset = r.meta.changes ?? 0
+  }
   const swept = await anchorSweep(c.env, c.env.DB, Number.isFinite(q) && q > 0 ? Math.min(q, 50) : 25)
-  return c.json({ swept })
+  return c.json({ swept, reset })
 })
 
 async function resolveNextKek(env: Env['Bindings']): Promise<string | null> {

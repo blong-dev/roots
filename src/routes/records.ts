@@ -22,7 +22,7 @@ import { dbFirst } from '../db'
 import { verifyExternal, type ExternalInput } from '../credentials/verify-external'
 import { walletExists, toExternalInput, writeSelfRecord, writeCredentialRecord } from '../records-core'
 import { anchorRecord } from '../anchor'
-import { activeWriteGrant } from '../grants'
+import { activeWriteGrant, logAccess } from '../grants'
 import { resolveKek, getWalletDataKey, openPayload } from '../wallet-crypto'
 import { lookupDataType } from '../data-types'
 
@@ -122,6 +122,10 @@ records.get('/:id/records/:rid/verify', delegatedHolderAuth, async (c) => {
   if (/^eyJ[\w-]+\.[\w-]+\.[\w-]+$/.test(p)) input = { kind: 'jwt', token: p }
   else { try { input = { kind: 'json', doc: JSON.parse(p) } } catch { return c.json({ error: 'record payload is not a verifiable credential' }, 400) } }
   const report = await verifyExternal(input, c.env.DB)
+  await logAccess(c.env.DB, {
+    walletId, reader: c.get('holder') ?? 'operator',
+    dataType: String(rec.data_type), purpose: 'verify', outcome: 'allowed',
+  })
   return c.json({ id: rec.id, report })
 })
 
@@ -200,6 +204,12 @@ records.get('/:id/records/:rid', delegatedHolderAuth, async (c) => {
   if (!rec) return c.json({ error: 'not found' }, 404)
   const pt = await plaintextPayload(c, walletId, rec)
   if (pt === null) return c.json({ error: 'record decryption unavailable (ROOTS_KEK not provisioned)' }, 503)
+  // A single-record plaintext read — logged so operator break-glass and
+  // holder reads alike appear in the owner's access log (audit F2).
+  await logAccess(c.env.DB, {
+    walletId, reader: c.get('holder') ?? 'operator',
+    dataType: String(rec.data_type), purpose: 'read', outcome: 'allowed',
+  })
   return c.json({ record: { ...rec, payload: pt } })
 })
 

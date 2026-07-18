@@ -56,6 +56,10 @@ export async function anchorRecord(env: AnchorEnv, db: D1Database, recordId: str
 
   try {
     const commitment = await recordCommitment(row.id, row.data_type, row.payload)
+    // Concurrent duplicate calls (write-path waitUntil vs cron sweep vs
+    // backfill) send byte-identical bodies; anchord's idempotency store keys
+    // on these fields and returns the same seed for all of them, so the race
+    // is benign — both writers land the same values below.
     const res = await fetch(`${env.ANCHOR_URL.replace(/\/$/, '')}/anchor`, {
       method: 'POST',
       headers: {
@@ -71,28 +75,48 @@ export async function anchorRecord(env: AnchorEnv, db: D1Database, recordId: str
     })
     if (!res.ok) throw new Error(`anchord ${res.status}: ${await res.text()}`)
     const out = (await res.json()) as AnchorResult
+    // A 200 with an unexpected body must NOT mark the row anchored with a
+    // null seed — that would be an unverifiable "anchored" record that never
+    // retries (audit F10).
+    if (typeof out?.id !== 'number' || typeof out?.txhash !== 'string' || typeof out?.height !== 'number') {
+      throw new Error(`anchord returned malformed success body: ${JSON.stringify(out).slice(0, 200)}`)
+    }
     await db
       .prepare(`UPDATE records SET seed_id = ?, anchor_tx = ?, anchor_height = ?, anchor_state = 'anchored' WHERE id = ?`)
       .bind(out.id, out.txhash, out.height, row.id)
       .run()
   } catch (e) {
-    await db.prepare(`UPDATE records SET anchor_state = 'failed' WHERE id = ?`).bind(row.id).run()
+    await db
+      .prepare(`UPDATE records SET anchor_state = 'failed', anchor_attempts = anchor_attempts + 1 WHERE id = ?`)
+      .bind(row.id)
+      .run()
     console.error(`anchor failed for record ${row.id}:`, e instanceof Error ? e.message : e)
   }
 }
+
+/** Retries per record before the sweep gives up (admin backfill resets). */
+export const MAX_ANCHOR_ATTEMPTS = 10
 
 /**
  * Sweep un-anchored active records (pending or previously failed) and anchor
  * them. Returns how many were attempted. Bounded per call so a sweep can't run
  * away; call repeatedly until it returns 0.
+ *
+ * Ordered by attempts THEN age: fresh records go first, so a block of
+ * permanently-failing old rows can't occupy every batch and starve new
+ * writes (audit — sweep starvation). Rows at the attempt cap are excluded;
+ * POST /admin/anchor/backfill resets their attempts to force a retry after
+ * the underlying cause is fixed.
  */
 export async function anchorSweep(env: AnchorEnv, db: D1Database, limit = 25): Promise<number> {
   if (!env.ANCHOR_URL) return 0
   const { results } = await db
     .prepare(
-      `SELECT id FROM records WHERE state = 'active' AND anchor_state IN ('pending', 'failed') ORDER BY created_at LIMIT ?`,
+      `SELECT id FROM records
+        WHERE state = 'active' AND anchor_state IN ('pending', 'failed') AND anchor_attempts < ?
+        ORDER BY anchor_attempts ASC, created_at ASC LIMIT ?`,
     )
-    .bind(limit)
+    .bind(MAX_ANCHOR_ATTEMPTS, limit)
     .all<{ id: string }>()
   for (const r of results) {
     await anchorRecord(env, db, r.id)

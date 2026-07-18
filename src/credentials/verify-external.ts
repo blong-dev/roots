@@ -175,22 +175,37 @@ function tierFor(checks: Check[], registered: boolean): Tier {
  * against an attacker's own key (e.g. a self-contained did:key) while the
  * credential claims a registered issuer would surface as `verified` — the trust
  * decision (vc.issuer) and the signature (verificationMethod) weren't tied
- * together. Conservative heuristic: same DID, same did:web[vh] authority, or same
- * host. An issuer that signs with a cross-scheme key its own DID document lists
- * will UNDER-verify (drop to self-reported) — safe, never the reverse.
+ * together. Binding = same DID, or the same FULL identity path across schemes
+ * (did:web:host:a:b ↔ https://host/a/b). Authority alone is NOT sufficient:
+ * on a multi-tenant domain (ours), did:web:id.dreamtree.org:tenants:alice and
+ * …:tenants:bob share an authority but are different issuers — a host-only
+ * match let one tenant sign as another (audit F-binding). An issuer that signs
+ * with a cross-scheme key its own DID document lists will UNDER-verify (drop
+ * to self-reported) — safe, never the reverse.
  */
 // guid:vx-didBoundToIssuer
 function didBoundToIssuer(vm: string | undefined, issuerId: string | undefined): boolean {
   if (!vm || !issuerId) return false
   const vmDid = vm.split('#')[0]
   if (vmDid === issuerId) return true
-  const authority = (s: string): string | null => {
-    const m = /^did:web(?:vh)?:([^:]+)/.exec(s)
-    if (m) return decodeURIComponent(m[1]).toLowerCase()
-    try { return new URL(s).host.toLowerCase() } catch { return null }
+  // Full identity path: host + every path segment, lowercased host.
+  const identityPath = (s: string): string | null => {
+    const m = /^did:web(?:vh)?:(.+)$/.exec(s)
+    if (m) {
+      const parts = m[1].split(':').map(decodeURIComponent)
+      // did:webvh carries a leading SCID segment before the domain — drop it
+      // so the comparable part starts at the host, like did:web.
+      if (s.startsWith('did:webvh:') && parts.length > 1) parts.shift()
+      return [parts[0].toLowerCase(), ...parts.slice(1)].join('/')
+    }
+    try {
+      const u = new URL(s)
+      const path = u.pathname.replace(/\/+$/, '').split('/').filter(Boolean)
+      return [u.host.toLowerCase(), ...path].join('/')
+    } catch { return null }
   }
-  const a = authority(vmDid)
-  const b = authority(issuerId)
+  const a = identityPath(vmDid)
+  const b = identityPath(issuerId)
   return !!a && a === b
 }
 

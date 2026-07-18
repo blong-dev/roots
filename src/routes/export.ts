@@ -20,6 +20,7 @@ import { getOrCreateIssuerKey } from '../credentials/keystore'
 import { createDataIntegrityProof } from '../credentials/di'
 import { issuerVerificationMethod } from '../credentials/keys'
 import { decryptRecords } from '../wallet-crypto'
+import { logAccess } from '../grants'
 
 const exportRoutes = new Hono<Env>()
 
@@ -40,7 +41,8 @@ exportRoutes.get('/:id/export', delegatedHolderAuth, async (c) => {
     c.env.DB.prepare('SELECT provider, provider_uid, created_at FROM wallet_identities WHERE wallet_id = ?').bind(walletId).all(),
     c.env.DB.prepare(
       `SELECT id, data_type, payload, encrypted, source_type, source_ref, issuer_id, signature,
-              alignment_json, state, created_at, updated_at
+              alignment_json, state, seed_id, anchor_tx, anchor_height, anchor_state,
+              created_at, updated_at
          FROM records WHERE wallet_id = ? ORDER BY created_at`,
     ).bind(walletId).all<Record<string, unknown>>(),
     c.env.DB.prepare(
@@ -52,9 +54,16 @@ exportRoutes.get('/:id/export', delegatedHolderAuth, async (c) => {
     c.env.DB.prepare('SELECT reader, data_type, purpose, outcome, at FROM access_log WHERE wallet_id = ? ORDER BY at').bind(walletId).all(),
   ])
 
+  // The on-chain commitment is sha256 over the SEALED at-rest bytes
+  // (see anchor.ts recordCommitment). Preserve that exact string as
+  // `payload_sealed` BEFORE decrypting, so the holder can recompute and
+  // match their on-chain anchor offline (audit — export verifiability).
+  const sealed = new Map(records.results.map((r) => [String(r.id), String(r.payload)]))
+
   // Decrypt at-rest payloads — the holder leaves with plaintext (bundle is signed).
   const decryptedRecords = await decryptRecords(c.env, walletId, records.results)
   if (decryptedRecords === null) return c.json({ error: 'export decryption unavailable (ROOTS_KEK not provisioned)' }, 503)
+  const recordsOut = decryptedRecords.map((r) => ({ ...r, payload_sealed: sealed.get(String(r.id)) }))
 
   const key = await getOrCreateIssuerKey(c.env.DB, kek, ROOTS_SIGNER)
   const unsecured: Record<string, unknown> = {
@@ -63,9 +72,17 @@ exportRoutes.get('/:id/export', delegatedHolderAuth, async (c) => {
     exported_at: new Date().toISOString(),
     exported_by: c.get('holder') ?? 'operator',
     issuer: { did: key.did, publicKeyMultibase: key.publicKeyMultibase },
+    // How to independently verify each record's on-chain anchor: recompute
+    // sha256( id + "\n" + data_type + "\n" + payload_sealed ) and compare to
+    // the commitment stored under seed_id on chain-id "dreamtree".
+    anchor_verification: {
+      commitment: 'sha256(utf8( id + "\\n" + data_type + "\\n" + payload_sealed ))',
+      chain_id: 'dreamtree',
+      note: 'payload_sealed is the exact at-rest string the commitment was taken over; payload is its decrypted form.',
+    },
     wallet,
     identities: identities.results,
-    records: decryptedRecords,
+    records: recordsOut,
     record_events: events.results,
     grants: grants.results,
     access_log: access.results,
@@ -74,6 +91,13 @@ exportRoutes.get('/:id/export', delegatedHolderAuth, async (c) => {
     privateJwk: key.privateJwk,
     verificationMethod: issuerVerificationMethod(key.did),
     proofPurpose: 'assertionMethod',
+  })
+  // A full-wallet plaintext read is the single most sensitive read there is;
+  // it must appear in the owner's access log — including operator break-glass
+  // (audit F2). data_type null + purpose 'export' marks the whole-wallet read.
+  await logAccess(c.env.DB, {
+    walletId, reader: c.get('holder') ?? 'operator', dataType: null,
+    purpose: 'export', outcome: 'allowed',
   })
   return c.json({ ...unsecured, proof })
 })

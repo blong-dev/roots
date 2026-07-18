@@ -15,7 +15,7 @@
  * Writes reuse records-core, so MCP and HTTP writes cannot diverge.
  */
 import { Hono } from 'hono'
-import type { Env } from '../auth'
+import { requireMtls, type Env } from '../auth'
 import { resolveApiKey, type ResolvedApiKey } from '../apikeys'
 import { verifyExternal, type ExternalInput } from '../credentials/verify-external'
 import { activeReadGrant, activeWriteGrant, logAccess } from '../grants'
@@ -196,6 +196,11 @@ function toText(data: unknown, isError = false) {
 
 // guid:roots-mcp-route
 mcp.post('/', async (c) => {
+  // Same second factor as every other authenticated surface: when
+  // ROOTS_REQUIRE_MTLS is on, an API key alone must not be sufficient here
+  // while it is insufficient at /w/... (audit F1).
+  const mtls = requireMtls(c)
+  if (mtls) return mtls
   const authz = c.req.header('authorization') ?? ''
   const presented = authz.startsWith('Bearer ') ? authz.slice(7).trim() : ''
   const key = presented ? await resolveApiKey(c.env.DB, presented) : null

@@ -52,12 +52,25 @@ export async function sealPayload(dataKeyB64: string, plaintext: string): Promis
 
 // guid:roots-walletcrypto-open
 /** Open a stored payload. Decrypts a v1 envelope; passes through legacy plaintext
- *  (records written before encryption-at-rest have encrypted=0). */
+ *  (records written before encryption-at-rest have encrypted=0).
+ *
+ *  The legacy fallthrough applies ONLY to non-envelope content. Once the stored
+ *  string parses as a v1 envelope, a decrypt failure (wrong data key after a
+ *  botched KEK rotation, corruption) THROWS — silently returning the ciphertext
+ *  envelope as if it were the payload would poison record reads and the signed
+ *  export bundle (audit F8). */
 export async function openPayload(dataKeyB64: string, stored: string): Promise<string> {
+  let env: { v?: number; iv?: string; ciphertext?: string } | null = null
   try {
-    const env = JSON.parse(stored) as { v?: number; iv?: string; ciphertext?: string }
-    if (env && env.v === 1 && env.iv && env.ciphertext) return await decryptSecret(dataKeyB64, env.ciphertext, env.iv)
+    env = JSON.parse(stored) as { v?: number; iv?: string; ciphertext?: string }
   } catch { /* not JSON — legacy plaintext */ }
+  if (env && env.v === 1 && env.iv && env.ciphertext) {
+    try {
+      return await decryptSecret(dataKeyB64, env.ciphertext, env.iv)
+    } catch (e) {
+      throw new Error('payload decrypt failed (envelope v1): ' + (e instanceof Error ? e.message : 'unknown'))
+    }
+  }
   return stored
 }
 
