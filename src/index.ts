@@ -19,6 +19,8 @@ import mcp from './routes/mcp'
 import identity from './routes/identity'
 import admin from './routes/admin'
 import { shareMint, sharePublic } from './routes/shares'
+import { holder } from './routes/holder'
+import { DASHBOARD_HTML, MANIFEST_JSON, SW_JS } from './dashboard'
 import ica from './routes/ica'
 import { LANDING_HTML } from './landing'
 import { DATA_TYPES } from './data-types'
@@ -84,6 +86,13 @@ app.route('/mcp', mcp)
 // public validity page ("check without exposing").
 app.route('/w', shareMint)
 app.route('/s', sharePublic)
+// The holder dashboard PWA (S2): view/add/verify/remove/share; device vault.
+app.route('/w', holder)
+app.get('/dashboard', (c) => c.html(DASHBOARD_HTML))
+app.get('/dashboard/manifest.webmanifest', (c) =>
+  c.body(MANIFEST_JSON, 200, { 'content-type': 'application/manifest+json' }))
+app.get('/dashboard/sw.js', (c) =>
+  c.body(SW_JS, 200, { 'content-type': 'application/javascript' }))
 // Operator-only key management (KEK rotation).
 app.route('/admin', admin)
 // CAWG Identity Claims Aggregator (dark until ROOTS_ICA_ENABLED).

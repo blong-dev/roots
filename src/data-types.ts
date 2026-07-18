@@ -26,6 +26,10 @@ export const DATA_TYPES: Record<string, DataTypeEntry> = {
   'dt.story.soared@1': { category: 'story', encrypted: true, kind: 'record' },
   // dt.experience.* — partial (description may be PII) → encrypt
   'dt.experience@1': { category: 'experience', encrypted: true, kind: 'record' },
+  // Device-vault documents (share-and-verify S2): the FILE stays on the
+  // holder's device; this record holds only metadata + the file's sha256.
+  // Encrypted at rest — a filename alone can be sensitive.
+  'dt.document.file@1': { category: 'document', encrypted: true, kind: 'record' },
   'dt.experience.employment@1': { category: 'experience', encrypted: true, kind: 'record' },
   'dt.experience.education@1': { category: 'experience', encrypted: true, kind: 'record' },
   // dt.value.*

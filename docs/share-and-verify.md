@@ -109,6 +109,14 @@ Verbs → rails: view (holder read path), add (device vault + record write),
 verify (local rehash + record verify + anchor), remove (retract/reinstate,
 append-only, honest), share (S1 tokens).
 
+**Delivery: installable PWA (owner 2026-07-18)** — manifest + service worker
+served by the roots worker. The device vault makes this the natural shape:
+view/verify work offline (OPFS + local hashing). Honest caveat surfaced in
+the UI: iOS Safari may evict storage of NON-installed web apps — vault users
+are pushed to install; the eventual sanctioned store app (same codebase,
+wrapped) is the durable home and unlocks secure-enclave vault-key storage +
+biometric unlock (storage crypto — custody canon unchanged).
+
 ## 3. Chain dashboard (public pulse)
 
 `roots.dreamtree.org/chain` (or dreamtree.org embed): supply vs peg, batch
