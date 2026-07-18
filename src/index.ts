@@ -18,6 +18,7 @@ import exportRoutes from './routes/export'
 import mcp from './routes/mcp'
 import identity from './routes/identity'
 import admin from './routes/admin'
+import ica from './routes/ica'
 import { LANDING_HTML } from './landing'
 import { DATA_TYPES } from './data-types'
 
@@ -29,6 +30,7 @@ export interface Bindings {
   ROOTS_DELEGATION_ISSUERS?: string // CSV of DIDs allowed to vouch for holders (e.g. did:web:telekora.com)
   ROOTS_REQUIRE_MTLS?: string // when set (non-empty), authenticated routes require a valid client cert (Cloudflare API Shield)
   ROOTS_MTLS_FINGERPRINTS?: string // optional CSV of allowed client-cert SHA-256 fingerprints (pin specific consumers)
+  ROOTS_ICA_ENABLED?: string // when set, the CAWG Identity Claims Aggregator surface (/ica) goes live
   ANCHOR_URL?: string // anchord base URL (e.g. https://anchor.dreamtree.org); unset disables anchoring
   ANCHOR_TOKEN?: string // Bearer for anchord
 }
@@ -79,6 +81,8 @@ app.route('/w', exportRoutes)
 app.route('/mcp', mcp)
 // Operator-only key management (KEK rotation).
 app.route('/admin', admin)
+// CAWG Identity Claims Aggregator (dark until ROOTS_ICA_ENABLED).
+app.route('/ica', ica)
 
 // Cron sweep: anchor any active record still pending (MCP writes, prior
 // failures, and the pre-anchoring backfill). Bounded per tick; runs until dry.
