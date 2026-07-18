@@ -21,6 +21,8 @@ import admin from './routes/admin'
 import { shareMint, sharePublic } from './routes/shares'
 import { holder } from './routes/holder'
 import { DASHBOARD_HTML, MANIFEST_JSON, SW_JS } from './dashboard'
+import { chain } from './routes/chain'
+import { DOCS_HTML } from './docs-page'
 import ica from './routes/ica'
 import { LANDING_HTML } from './landing'
 import { DATA_TYPES } from './data-types'
@@ -36,6 +38,7 @@ export interface Bindings {
   ROOTS_ICA_ENABLED?: string // when set, the CAWG Identity Claims Aggregator surface (/ica) goes live
   ANCHOR_URL?: string // anchord base URL (e.g. https://anchor.dreamtree.org); unset disables anchoring
   ANCHOR_TOKEN?: string // Bearer for anchord
+  CHAIN_STATS_TOKEN?: string // Bearer for the m3 chain-stats pusher (outbound push, /chain/push)
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -93,6 +96,10 @@ app.get('/dashboard/manifest.webmanifest', (c) =>
   c.body(MANIFEST_JSON, 200, { 'content-type': 'application/manifest+json' }))
 app.get('/dashboard/sw.js', (c) =>
   c.body(SW_JS, 200, { 'content-type': 'application/javascript' }))
+// The public chain pulse (S4): stats pushed OUTBOUND from m3; page + JSON.
+app.route('/chain', chain)
+// How to use all of this (S5): humans + developers/agents, one honest page.
+app.get('/docs', (c) => c.html(DOCS_HTML))
 // Operator-only key management (KEK rotation).
 app.route('/admin', admin)
 // CAWG Identity Claims Aggregator (dark until ROOTS_ICA_ENABLED).
