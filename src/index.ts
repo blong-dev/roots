@@ -39,6 +39,7 @@ export interface Bindings {
   ANCHOR_URL?: string // anchord base URL (e.g. https://anchor.dreamtree.org); unset disables anchoring
   ANCHOR_TOKEN?: string // Bearer for anchord
   CHAIN_STATS_TOKEN?: string // Bearer for the m3 chain-stats pusher (outbound push, /chain/push)
+  ROOTS_SESSION_SECRET?: string // HMAC secret for holder dashboard sessions
 }
 
 const app = new Hono<{ Bindings: Bindings }>()

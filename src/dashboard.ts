@@ -75,7 +75,7 @@ export const DASHBOARD_HTML = `<!doctype html>
     <input type="password" id="token" placeholder="access token">
     <button class="primary" onclick="connect()">Open wallet</button>
   </div>
-  <p class="mut" style="font-size:.8rem">Access uses your delegation or an operator token for now — holder login arrives with the identity release. Hosted custody, honestly: roots can read hosted records during your session; your vault files it can never read.</p>
+  <p class="mut" style="font-size:.8rem">No wallet yet? <a href="https://dreamtree.org/signup">Create one at dreamtree.org</a> — your wallet opens from there, no tokens needed. Direct access below uses a delegation or operator token — holder login arrives with the identity release. Hosted custody, honestly: roots can read hosted records during your session; your vault files it can never read.</p>
 </section>
 
 <section id="app" style="display:none">
@@ -93,7 +93,8 @@ export const DASHBOARD_HTML = `<!doctype html>
 <script>
 const $=(s)=>document.querySelector(s);
 let W=null,T=null;
-const hdr=()=>({'authorization':'Bearer '+T,'content-type':'application/json'});
+let SESS=null;
+const hdr=()=>SESS?{'x-roots-session':SESS,'content-type':'application/json'}:{'authorization':'Bearer '+T,'content-type':'application/json'};
 function toast(m){const t=$('#toast');t.textContent=m;t.style.opacity=1;setTimeout(()=>t.style.opacity=0,2600)}
 const hex=(b)=>[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');
 
@@ -210,4 +211,24 @@ function render(records){
 
 if('serviceWorker' in navigator)navigator.serviceWorker.register('/dashboard/sw.js');
 const lw=localStorage.getItem('last-wallet');if(lw)$('#wallet').value=lw;
+// Handoff from dreamtree.org (user-management v0): #w=<wallet>&s=<session>.
+(function(){
+  const m=Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
+  if(m.w&&m.s){
+    sessionStorage.setItem('dt-sess',JSON.stringify({w:m.w,s:m.s}));
+    history.replaceState(null,'',location.pathname);
+  }
+  const saved=sessionStorage.getItem('dt-sess');
+  if(saved){
+    const {w,s}=JSON.parse(saved);W=w;SESS=s;
+    fetch('/w/'+W+'/holder/records',{headers:hdr()}).then(r=>{
+      if(!r.ok){sessionStorage.removeItem('dt-sess');return}
+      r.json().then(j=>{
+        document.getElementById('connect').style.display='none';
+        document.getElementById('app').style.display='block';
+        render(j.records);
+      });
+    });
+  }
+})();
 </script></main></body></html>`

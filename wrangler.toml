@@ -49,6 +49,8 @@ secret_name = "ROOTS_KEK"
 # Anchoring: point roots at anchord (the chain's HTTP anchor seam on m3).
 # ANCHOR_TOKEN is a secret:  wrangler secret put ANCHOR_TOKEN
 [vars]
+# DIDs allowed to vouch for holders (delegation issuers). Not secret.
+ROOTS_DELEGATION_ISSUERS = "did:web:telekora.com:tenants:platform,did:web:dreamtree.org"
 ANCHOR_URL = "https://anchor.dreamtree.org"
 
 # Cron: sweep un-anchored active records (MCP writes, retries, backfill).

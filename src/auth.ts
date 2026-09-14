@@ -163,6 +163,18 @@ export async function delegatedHolderAuth(c: Context<Env>, next: Next): Promise<
     c.set('holder', d.holder)
     return await next()
   }
+  // Holder session (user-management v0): an HMAC-signed short-lived token
+  // minted by POST /w/:id/holder/session after a valid delegation. Lets the
+  // dashboard make many requests from one single-use delegation.
+  const sess = c.req.header('x-roots-session')
+  if (sess && c.env.ROOTS_SESSION_SECRET) {
+    const v = await verifyHolderSession(c.env.ROOTS_SESSION_SECRET, sess)
+    if (v && v.wallet === c.req.param('id')) {
+      c.set('holder', v.holder)
+      return await next()
+    }
+    return c.json({ error: 'invalid or expired session' }, 401)
+  }
   // Owner break-glass: the platform operator acting headlessly (not per-user).
   const tok = c.env.ROOTS_OPS_TOKEN
   const got = bearer(c)
@@ -170,5 +182,41 @@ export async function delegatedHolderAuth(c: Context<Env>, next: Next): Promise<
     c.set('holder', 'operator')
     return await next()
   }
-  return c.json({ error: 'holder delegation or operator break-glass required' }, 401)
+  return c.json({ error: 'holder delegation, session, or operator break-glass required' }, 401)
+}
+
+// ---- holder sessions (HMAC, stateless) -------------------------------------
+
+function b64u(b: ArrayBuffer | Uint8Array): string {
+  const u = b instanceof Uint8Array ? b : new Uint8Array(b)
+  let s = ''
+  for (const x of u) s += String.fromCharCode(x)
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+async function sessionHmac(secret: string, body: string): Promise<string> {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  return b64u(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body)))
+}
+
+export async function mintHolderSession(secret: string, wallet: string, holder: string, ttlS = 3600): Promise<{ token: string; expires_at: string }> {
+  const exp = Math.floor(Date.now() / 1000) + ttlS
+  const body = b64u(new TextEncoder().encode(JSON.stringify({ w: wallet, h: holder, exp })))
+  return { token: `${body}.${await sessionHmac(secret, body)}`, expires_at: new Date(exp * 1000).toISOString() }
+}
+
+export async function verifyHolderSession(secret: string, token: string): Promise<{ wallet: string; holder: string } | null> {
+  const [body, mac] = token.split('.')
+  if (!body || !mac) return null
+  const want = await sessionHmac(secret, body)
+  if (mac.length !== want.length) return null
+  let diff = 0
+  for (let i = 0; i < mac.length; i++) diff |= mac.charCodeAt(i) ^ want.charCodeAt(i)
+  if (diff !== 0) return null
+  try {
+    const p = JSON.parse(new TextDecoder().decode(b64urlDecode(body))) as { w?: string; h?: string; exp?: number }
+    if (!p.w || !p.h || typeof p.exp !== 'number' || p.exp < Math.floor(Date.now() / 1000)) return null
+    return { wallet: p.w, holder: p.h }
+  } catch { return null }
 }

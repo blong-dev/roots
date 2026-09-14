@@ -6,3 +6,4 @@ dist/
 *.log
 .roots-ops-token
 .telekora-roots-key
+.claude/

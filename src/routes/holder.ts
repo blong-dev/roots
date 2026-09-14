@@ -9,7 +9,7 @@
  */
 import { Hono } from 'hono'
 import type { Bindings } from '../index'
-import { delegatedHolderAuth } from '../auth'
+import { delegatedHolderAuth, mintHolderSession } from '../auth'
 import { DATA_TYPES } from '../data-types'
 import { writeSelfRecord } from '../records-core'
 import { resolveKek, getWalletDataKey } from '../wallet-crypto'
@@ -17,6 +17,15 @@ import { resolveKek, getWalletDataKey } from '../wallet-crypto'
 type Env = { Bindings: Bindings }
 
 export const holder = new Hono<Env>()
+
+// Session issuance: one valid delegation (single-use) buys a short-lived
+// session so the dashboard can breathe. Also honors break-glass.
+holder.post('/:id/holder/session', delegatedHolderAuth, async (c) => {
+  if (!c.env.ROOTS_SESSION_SECRET) return c.json({ error: 'sessions not configured' }, 503)
+  const out = await mintHolderSession(c.env.ROOTS_SESSION_SECRET, c.req.param('id')!,
+    String(c.get('holder' as never) ?? 'holder'))
+  return c.json(out, 201)
+})
 
 // Metadata list — the dashboard's View. No payloads: sealed content stays
 // sealed; document content lives in the device vault; credential rendering
